@@ -32,7 +32,10 @@ uint8_t packetCounter = 0;
 bool spk_active = false;
 bool mic_active = false;
 
-uint8_t interrupt_in_data[63] = {
+// Neutral/idle DualSense input report: centered sticks, no buttons. Every
+// slot's buffer starts from this so the host sees a quiet pad (not garbage)
+// before the first BT report lands.
+static const uint8_t idle_input_report[63] = {
     0x7f, 0x7d, 0x7f, 0x7e, 0x00, 0x00, 0xa7, 0x08, 0x00, 0x00, 0x00,
     0x52, 0x43, 0x30, 0x41, 0x01, 0x00, 0x0e, 0x00, 0xef, 0xff, 0x03,
     0x03, 0x7b, 0x1b, 0x18, 0xf0, 0xcc, 0x9c, 0x60, 0x00, 0xfc, 0x80,
@@ -40,8 +43,14 @@ uint8_t interrupt_in_data[63] = {
     0x00, 0x00, 0x00, 0x00, 0xa7, 0xad, 0x60, 0x00, 0x29, 0x18, 0x00,
     0x53, 0x9f, 0x28, 0x35, 0xa5, 0xa8, 0x0c, 0x8b};
 
+// Latest gamepad input report per slot (bt.cpp and battery_led.cpp read
+// these too). Only slot BT_USB_SLOT is bridged to USB until the per-slot
+// interface fan-out lands; the other rows are kept fresh for status and the
+// upcoming composite device.
+uint8_t interrupt_in_data[BT_MAX_SLOTS][63];
+
 critical_section_t report_cs;
-volatile bool report_dirty = false;
+volatile bool report_dirty[BT_MAX_SLOTS] = {};
 
 void interrupt_loop() {
 #ifdef ENABLE_WAKE_HID
@@ -58,7 +67,7 @@ void interrupt_loop() {
 
   // TODO: Refactor for better code reuse
   if (get_config().polling_rate_mode != 2) {
-    if (!tud_hid_report(0x01, interrupt_in_data, 63)) {
+    if (!tud_hid_report(0x01, interrupt_in_data[BT_USB_SLOT], 63)) {
       printf("[USBHID] tud_hid_report error\n");
     }
     return;
@@ -69,9 +78,9 @@ void interrupt_loop() {
   uint8_t safe_report[63];
 
   critical_section_enter_blocking(&report_cs);
-  if (report_dirty) {
-    memcpy(safe_report, interrupt_in_data, 63);
-    report_dirty = false;
+  if (report_dirty[BT_USB_SLOT]) {
+    memcpy(safe_report, interrupt_in_data[BT_USB_SLOT], 63);
+    report_dirty[BT_USB_SLOT] = false;
     should_send = true;
   }
   critical_section_exit(&report_cs);
@@ -84,7 +93,7 @@ void interrupt_loop() {
       // If the report failed to queue, restore the dirty flag
       // so we try again on the next loop iteration.
       critical_section_enter_blocking(&report_cs);
-      report_dirty = true;
+      report_dirty[BT_USB_SLOT] = true;
       critical_section_exit(&report_cs);
     }
   }
@@ -101,20 +110,28 @@ void state_push_to_bt() {
     reportSeqCounter = 0;
   }
   outputData[2] = 0x10;
-  state_get(outputData + 3, sizeof(SetStateData));
-  bt_write(outputData, sizeof(outputData));
+  state_get(BT_USB_SLOT, outputData + 3, sizeof(SetStateData));
+  bt_write(BT_USB_SLOT, outputData, sizeof(outputData));
 }
 
-void on_bt_data(CHANNEL_TYPE channel, uint8_t *data, uint16_t len) {
-  // printf("[Main] BT data callback: channel=%u len=%u\n", channel, len);
+void on_bt_data(uint8_t slot, CHANNEL_TYPE channel, uint8_t *data,
+                uint16_t len) {
+  // printf("[Main] BT data callback: slot=%u channel=%u len=%u\n", slot,
+  //        channel, len);
   if (channel == INTERRUPT && len > 2 && data[1] == 0x31) {
     if (data[2] >> 1 & 1) {
-      mic_add_queue(data + 4);
+      // Controller mic audio rides in the input report. Only the USB-exposed
+      // slot's audio path is live; other slots shouldn't be streaming (the
+      // tier policy keeps their mic off), so drop any stray frames.
+      if (slot == BT_USB_SLOT) {
+        mic_add_queue(data + 4);
+      }
       return;
     }
 
-    // Mute button detection (data[12] corresponds to byte 9 of input data)
-    if (!g_host_hid_manages_mute) {
+    // Mute button detection (data[12] corresponds to byte 9 of input data).
+    // Mute/jack are audio-path concerns -> USB-exposed slot only.
+    if (slot == BT_USB_SLOT && !g_host_hid_manages_mute) {
       static bool prev_mute_pressed = false;
       bool mute_pressed = (data[12] & 0x04) != 0;
       if (mute_pressed && !prev_mute_pressed) {
@@ -125,24 +142,28 @@ void on_bt_data(CHANNEL_TYPE channel, uint8_t *data, uint16_t len) {
       prev_mute_pressed = mute_pressed;
     }
 
-    // Track actual DS5 jack state separately — interrupt_in_data[53]
+    // Track actual DS5 jack state separately — interrupt_in_data[..][53]
     // has its HP_DETECT bit forced high for host UCM routing and cannot
     // be used as the previous-state comparison here.
-    static uint8_t last_jack_state =
-        0xFF; // sentinel: force set_headset on first report
-    const uint8_t cur_jack_state = data[56] & 1;
-    if (cur_jack_state != last_jack_state) {
-      set_headset(cur_jack_state);
-      last_jack_state = cur_jack_state;
+    if (slot == BT_USB_SLOT) {
+      static uint8_t last_jack_state =
+          0xFF; // sentinel: force set_headset on first report
+      const uint8_t cur_jack_state = data[56] & 1;
+      if (cur_jack_state != last_jack_state) {
+        set_headset(cur_jack_state);
+        last_jack_state = cur_jack_state;
+      }
     }
 
     // Wake-on-PS must observe every BT input report regardless of polling
     // mode: the wake feature has its own state to maintain (button-byte
     // diff for edge detection) and short-circuiting it on non-2 polling
-    // modes silently breaks wake while the host is suspended.
+    // modes silently breaks wake while the host is suspended. Any slot's
+    // controller may wake the host (idle pads report identical neutral
+    // button bytes, so interleaved slots don't fake edges).
     wake_on_bt_input(data + 3, len - 3);
 
-    // interrupt_in_data[53] = dualsense_input_report.status[1]:
+    // interrupt_in_data[..][53] = dualsense_input_report.status[1]:
     //   bit 0 = HP_DETECT  (headphones plugged into DS5 3.5mm jack)
     //   bit 1 = MIC_DETECT (headset mic plugged into DS5 3.5mm jack)
     // hid-playstation (≥6.18) reads these and emits SW_HEADPHONE_INSERT /
@@ -152,9 +173,11 @@ void on_bt_data(CHANNEL_TYPE channel, uint8_t *data, uint16_t len) {
     // stereo Headphones profiles. We pass the DS5's real values through
     // unchanged — the DS5 hardware jack sensor is authoritative.
     if (get_config().polling_rate_mode != 2) {
-      memcpy(interrupt_in_data, data + 3, 63);
+      memcpy(interrupt_in_data[slot], data + 3, 63);
 #if ENABLE_BATT_LED
-      battery_led_note_report();
+      if (slot == BT_USB_SLOT) {
+        battery_led_note_report();
+      }
 #endif
       return;
     }
@@ -167,11 +190,13 @@ void on_bt_data(CHANNEL_TYPE channel, uint8_t *data, uint16_t len) {
     // new data is available
     //  and needs to be sent in the next interrupt report.
     critical_section_enter_blocking(&report_cs);
-    memcpy(interrupt_in_data, data + 3, 63);
-    report_dirty = true;
+    memcpy(interrupt_in_data[slot], data + 3, 63);
+    report_dirty[slot] = true;
     critical_section_exit(&report_cs);
 #if ENABLE_BATT_LED
-    battery_led_note_report();
+    if (slot == BT_USB_SLOT) {
+      battery_led_note_report();
+    }
 #endif
   }
 }
@@ -261,7 +286,7 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id,
   if (report_id == 0) {
     switch (buffer[0]) {
     case 0x02: {
-      state_update(buffer + 1, bufsize - 1);
+      state_update(BT_USB_SLOT, buffer + 1, bufsize - 1);
       // When the headset/speaker is active, output reports normally piggyback
       // on the audio frame path, so we defer (break) here to avoid double-send.
       // But a rumble-bearing SetStateData (UseRumbleNotHaptics flags set) must
@@ -280,8 +305,8 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id,
       }
       outputData[2] = 0x10;
       // memcpy(outputData + 3, buffer + 1, bufsize - 1);
-      state_get(outputData + 3, sizeof(SetStateData));
-      bt_write(outputData, sizeof(outputData));
+      state_get(BT_USB_SLOT, outputData + 3, sizeof(SetStateData));
+      bt_write(BT_USB_SLOT, outputData, sizeof(outputData));
       break;
     }
     }
@@ -355,7 +380,14 @@ int main() {
     printf("Clean boot\n");
   }
 
-  // Initialize the critical section for the report buffer
+  // Seed every slot's input buffer with the neutral idle report so the host
+  // sees centered sticks (not zeros) before the first BT report arrives.
+  for (int slot = 0; slot < BT_MAX_SLOTS; slot++) {
+    memcpy(interrupt_in_data[slot], idle_input_report,
+           sizeof(idle_input_report));
+  }
+
+  // Initialize the critical section for the report buffers
   critical_section_init(&report_cs);
   wake_init();
 

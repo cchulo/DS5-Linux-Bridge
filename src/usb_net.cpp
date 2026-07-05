@@ -335,7 +335,9 @@ static int json_bonds(char *out, size_t cap) {
 // firmware already tracks.
 static int json_status(char *out, size_t cap) {
     BtStatus s;
-    bt_get_status(&s);
+    // Status of the USB-exposed slot (the Decky/web contract's single
+    // controller view; a slots[] array will be added alongside it).
+    bt_get_status(BT_USB_SLOT, &s);
     return snprintf(out, cap,
                     "{\"connected\":%s,"
                     "\"model\":\"%s\","

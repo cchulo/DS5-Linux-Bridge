@@ -9,8 +9,12 @@
 #include "config.h"
 #include "pico/cyw43_arch.h"
 #include "pico/time.h"
+#include "slots.h"
 
-extern uint8_t interrupt_in_data[63];
+// Per-slot input buffers (main.cpp). The single onboard LED tracks the
+// USB-exposed slot's controller only; per-slot battery will surface through
+// the web API instead.
+extern uint8_t interrupt_in_data[][63];
 
 namespace {
 
@@ -63,7 +67,7 @@ void battery_led_tick(void) {
         return;
     }
 
-    const uint8_t b   = interrupt_in_data[52];
+    const uint8_t b   = interrupt_in_data[BT_USB_SLOT][52];
     const uint8_t pct = b & 0x0F;
     const uint8_t st  = (b >> 4) & 0x0F;
     const bool low    = (st == POWER_STATE_DISCHARGING) && (pct <= THRESHOLD_LEVEL);

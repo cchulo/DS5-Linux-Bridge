@@ -11,12 +11,20 @@
 
 // CYW43 HCI Transport requires pre-buffer space for packet header
 
-// Se estiver 1 ou 2, o 0x31 do DualSense causa estouro
-#define MAX_NR_HCI_ACL_PACKETS 4
+// Concurrent controller slots. Set by CMake (MULTI_SLOT_COUNT); BTstack
+// sources compile inside the ds5-bridge target, so the definition is visible
+// here. Fall back to 1 so a bare include still builds single-controller.
+#ifndef MULTI_SLOT_COUNT
+#define MULTI_SLOT_COUNT 1
+#endif
 
-#define MAX_NR_HCI_CONNECTIONS 1
-#define MAX_NR_L2CAP_CHANNELS  2
-#define MAX_NR_L2CAP_SERVICES  3 // GDP + CONTROL + INTERRUPT
+// Se estiver 1 ou 2, o 0x31 do DualSense causa estouro
+// (per connection: fewer than ~3-4 ACL buffers overflows on the DS 0x31 report)
+#define MAX_NR_HCI_ACL_PACKETS (4 * MULTI_SLOT_COUNT)
+
+#define MAX_NR_HCI_CONNECTIONS MULTI_SLOT_COUNT
+#define MAX_NR_L2CAP_CHANNELS  (2 * MULTI_SLOT_COUNT) // control + interrupt per slot
+#define MAX_NR_L2CAP_SERVICES  3 // GDP + CONTROL + INTERRUPT (shared across slots)
 //
 #define HCI_ACL_PAYLOAD_SIZE 1021
 #define HCI_ACL_CHUNK_SIZE_ALIGNMENT 4

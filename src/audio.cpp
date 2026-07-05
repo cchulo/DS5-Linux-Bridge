@@ -203,7 +203,9 @@ void audio_loop() {
         pkt[1] = reportSeqCounter << 4;
         reportSeqCounter = (reportSeqCounter + 1) & 0x0F;
         pkt[10] = packetCounter++;
-        state_get(pkt + 13, 63);
+        // Audio serves the USB-exposed slot only (the tier manager's
+        // designated audio slot once slots fan out).
+        state_get(BT_USB_SLOT, pkt + 13, 63);
         memcpy(pkt + 78, haptic_buf, SAMPLE_SIZE);
 #if !DISABLE_SPEAKER_PROC
         critical_section_enter_blocking(&opus_cs);
@@ -211,7 +213,7 @@ void audio_loop() {
         critical_section_exit(&opus_cs);
 #endif
 
-        bt_write(pkt, sizeof(pkt), /*kick=*/false);
+        bt_write(BT_USB_SLOT, pkt, sizeof(pkt), /*kick=*/false);
     }
 }
 

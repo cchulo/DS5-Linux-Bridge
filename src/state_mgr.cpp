@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstring>
 
+#include "state_mgr.h"
 #include "utils.h"
 
 namespace {
@@ -14,6 +15,7 @@ namespace {
     constexpr size_t kAudioControl2Offset = kMotorPowerLevelOffset + sizeof(uint8_t);
     constexpr size_t kHapticLowPassFilterOffset = offsetof(SetStateData, LightFadeAnimation) - 2 * sizeof(uint8_t);
     constexpr size_t kPlayerIndicatorsOffset = offsetof(SetStateData, LedRed) - sizeof(uint8_t);
+    constexpr size_t kLedColorOffset = offsetof(SetStateData, LedRed);
 }
 
 static constexpr uint8_t state_init_data[63] = {
@@ -28,47 +30,85 @@ static constexpr uint8_t state_init_data[63] = {
     0xff, 0xd7, 0x00 // RGB LED: R, G, B (Nijika Color!)✨
 };
 
+#if BT_MAX_SLOTS > 1
+// PS5-style slot identity, applied at connect (report 0x32) and whenever a
+// slot resets: lightbar color blue/red/green/pink plus the matching
+// player-indicator LED pattern (5-LED bar: center / 2 / 3 / 4 dots). Games
+// override both via AllowLedColor / AllowPlayerIndicators as usual.
+// Single-slot builds keep the fork's default color above so single-controller
+// behavior stays regression-identical to upstream.
+static constexpr uint8_t slot_led_rgb[][3] = {
+    {0x00, 0x00, 0xff}, // slot 0: blue   (player 1)
+    {0xff, 0x00, 0x00}, // slot 1: red    (player 2)
+    {0x00, 0xff, 0x00}, // slot 2: green  (player 3)
+    {0xff, 0x00, 0x40}, // slot 3: pink   (player 4)
+};
+static constexpr uint8_t slot_player_leds[] = {
+    0x04, // player 1: -- -- ## -- --
+    0x0A, // player 2: -- ## -- ## --
+    0x15, // player 3: ## -- ## -- ##
+    0x1B, // player 4: ## ## -- ## ##
+};
+#endif
+
 volatile bool g_firmware_mic_muted = false;
 volatile bool g_host_hid_manages_mute = false;
 volatile uint8_t g_last_uac_mute = 0xFF;
 
-uint8_t state[63]{};
+static uint8_t state[BT_MAX_SLOTS][63]{};
 
 void state_reset_mute() {
     g_firmware_mic_muted = false;
     g_host_hid_manages_mute = false;
     g_last_uac_mute = 0xFF;
-    state[8] = 0; // MuteLight::Off
-    state[9] &= ~(1 << 4); // Clear MicMute bit (bit 4 of byte 9)
+    state[BT_USB_SLOT][8] = 0; // MuteLight::Off
+    state[BT_USB_SLOT][9] &= ~(1 << 4); // Clear MicMute bit (bit 4 of byte 9)
 }
 
 void state_set_local_mute(bool muted) {
     if (muted) {
-        state[8] = 1; // MuteLight::On (solid orange)
-        state[9] |= (1 << 4); // MicMute bit
+        state[BT_USB_SLOT][8] = 1; // MuteLight::On (solid orange)
+        state[BT_USB_SLOT][9] |= (1 << 4); // MicMute bit
     } else {
-        state[8] = 0; // MuteLight::Off
-        state[9] &= ~(1 << 4); // Clear MicMute bit
+        state[BT_USB_SLOT][8] = 0; // MuteLight::Off
+        state[BT_USB_SLOT][9] &= ~(1 << 4); // Clear MicMute bit
     }
+}
+
+void state_slot_reset(uint8_t slot) {
+    if (slot >= BT_MAX_SLOTS) return;
+    memcpy(state[slot], state_init_data, sizeof(state_init_data));
+#if BT_MAX_SLOTS > 1
+    state[slot][kLedColorOffset]     = slot_led_rgb[slot][0];
+    state[slot][kLedColorOffset + 1] = slot_led_rgb[slot][1];
+    state[slot][kLedColorOffset + 2] = slot_led_rgb[slot][2];
+    state[slot][kPlayerIndicatorsOffset] = slot_player_leds[slot];
+#endif
 }
 
 void state_init() {
-    memcpy(state, state_init_data, sizeof(state));
+    for (uint8_t slot = 0; slot < BT_MAX_SLOTS; slot++) {
+        state_slot_reset(slot);
+    }
     state_reset_mute();
 }
 
-void state_get(uint8_t *data, const uint8_t size) {
-    if (size > sizeof(state)) {
-        // state[] is 63 bytes; copying more would OOB-read state and OOB-write
-        // caller's buffer. Refuse rather than memcpy past the source.
+void state_get(uint8_t slot, uint8_t *data, const uint8_t size) {
+    if (slot >= BT_MAX_SLOTS) return;
+    if (size > sizeof(state[slot])) {
+        // state[] rows are 63 bytes; copying more would OOB-read state and
+        // OOB-write caller's buffer. Refuse rather than memcpy past the source.
         printf("[StateMgr] Error: state_get size %u > %u; refused\n",
-               size, static_cast<unsigned>(sizeof(state)));
+               size, static_cast<unsigned>(sizeof(state[slot])));
         return;
     }
-    memcpy(data, state, size);
+    memcpy(data, state[slot], size);
 }
 
-void state_update(const uint8_t *data, const uint8_t size) {
+void state_update(uint8_t slot, const uint8_t *data, const uint8_t size) {
+    if (slot >= BT_MAX_SLOTS) return;
+    uint8_t *st = state[slot];
+
     // macOS sends a shorter SetStateData (47 bytes) than the full struct; the
     // trailing fields it omits are unused here, so accept anything >= 47 and let
     // the memcpy below over-read into zero-init padding. Rejecting short reports
@@ -87,7 +127,7 @@ void state_update(const uint8_t *data, const uint8_t size) {
 
     const auto copy_if_allowed = [&](const bool allowed, const size_t offset, const size_t length) {
         if (allowed) {
-            memcpy(state + offset, data + offset, length);
+            memcpy(st + offset, data + offset, length);
         }
     };
     auto set_bit = [](uint8_t &byte, const int bit, const bool value) {
@@ -101,9 +141,9 @@ void state_update(const uint8_t *data, const uint8_t size) {
     if (update.RumbleEmulationLeft > 0 || update.RumbleEmulationRight > 0) {
         update.UseRumbleNotHaptics = true;
     }
-    set_bit(state[0], 0, update.EnableRumbleEmulation);
-    set_bit(state[0], 1, update.UseRumbleNotHaptics);
-    set_bit(state[38], 2, update.EnableImprovedRumbleEmulation);
+    set_bit(st[0], 0, update.EnableRumbleEmulation);
+    set_bit(st[0], 1, update.UseRumbleNotHaptics);
+    set_bit(st[38], 2, update.EnableImprovedRumbleEmulation);
     copy_if_allowed(
         update.UseRumbleNotHaptics ||
             update.EnableRumbleEmulation ||
@@ -133,29 +173,44 @@ void state_update(const uint8_t *data, const uint8_t size) {
         sizeof(uint8_t)
     );*/
 
-    if ((update.AllowMuteLight && update.MuteLightMode == MuteLight::On) ||
-        (update.AllowAudioMute && update.MicMute)) {
-        g_host_hid_manages_mute = true;
-    }
+    // Hybrid mute only applies to the USB-exposed slot (the one whose audio
+    // path is live); other slots take the mute-light bytes verbatim below.
+    if (slot == BT_USB_SLOT) {
+        if ((update.AllowMuteLight && update.MuteLightMode == MuteLight::On) ||
+            (update.AllowAudioMute && update.MicMute)) {
+            g_host_hid_manages_mute = true;
+        }
 
-    if (g_host_hid_manages_mute) {
+        if (g_host_hid_manages_mute) {
+            copy_if_allowed(
+                update.AllowMuteLight,
+                offsetof(SetStateData, MuteLightMode),
+                sizeof(update.MuteLightMode)
+            );
+
+            copy_if_allowed(
+                update.AllowAudioMute,
+                kMuteControlOffset,
+                sizeof(uint8_t)
+            );
+
+            if (update.AllowMuteLight) {
+                g_firmware_mic_muted = (update.MuteLightMode == MuteLight::On);
+            } else if (update.AllowAudioMute) {
+                g_firmware_mic_muted = (update.MicMute != 0);
+            }
+        }
+    } else {
         copy_if_allowed(
             update.AllowMuteLight,
             offsetof(SetStateData, MuteLightMode),
             sizeof(update.MuteLightMode)
         );
-
         copy_if_allowed(
             update.AllowAudioMute,
             kMuteControlOffset,
             sizeof(uint8_t)
         );
-
-        if (update.AllowMuteLight) {
-            g_firmware_mic_muted = (update.MuteLightMode == MuteLight::On);
-        } else if (update.AllowAudioMute) {
-            g_firmware_mic_muted = (update.MicMute != 0);
-        }
     }
 
     copy_if_allowed(

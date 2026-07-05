@@ -8,23 +8,29 @@
 #include <cstdint>
 #include <vector>
 
+#include "slots.h"
+
 enum CHANNEL_TYPE {
     INTERRUPT,
     CONTROL
 };
 
-typedef void (*bt_data_callback_t)(CHANNEL_TYPE channel, uint8_t *data, uint16_t len);
+// Data callback now carries the slot index the packet arrived on. Slots are
+// assigned at connection time (lowest free slot); slot BT_USB_SLOT is the one
+// bridged to USB HID/audio until the per-slot interface fan-out lands.
+typedef void (*bt_data_callback_t)(uint8_t slot, CHANNEL_TYPE channel, uint8_t *data, uint16_t len);
 
 int bt_init();
 void bt_register_data_callback(bt_data_callback_t callback);
-void bt_send_packet(uint8_t *data, uint16_t len);
-void bt_send_control(uint8_t *data, uint16_t len);
-void bt_write(const uint8_t *data, uint16_t len, bool kick = true);
-// Kick the BT send chain if pending. Called from main loop after
+void bt_write(uint8_t slot, const uint8_t *data, uint16_t len, bool kick = true);
+// Kick the BT send chains if pending. Called from main loop after
 // cyw43_arch_poll() so the kick cost is paid outside audio_loop.
 void bt_pump();
 bool bt_send_pending();
-void bt_get_signal_strength(int8_t *rssi);
+void bt_get_signal_strength(uint8_t slot, int8_t *rssi);
+
+// Number of slots with a live ACL connection.
+int bt_connected_count();
 
 // Live controller status for the web UI / Decky plugin (GET /api/status).
 // All fields are cheap reads of data the firmware already tracks. battery_pct
@@ -39,17 +45,34 @@ struct BtStatus {
     bool    charging;     // true while the controller is charging or full
     bool    battery_valid;// false until a fresh input report has been seen
 };
-void bt_get_status(BtStatus *out);
-std::vector<uint8_t> get_feature_data(uint8_t reportId,uint16_t len);
-void init_feature();
-void set_feature_data(uint8_t reportId, uint8_t* data,uint16_t len);
+void bt_get_status(uint8_t slot, BtStatus *out);
 
-// Tells the connected DualSense to power off (same as a long-press of the
-// PS button). No-op if no controller is connected. Used on host-suspend so
-// the controller doesn't sit awake until its idle timer fires.
+std::vector<uint8_t> get_feature_data(uint8_t slot, uint8_t reportId, uint16_t len);
+void init_feature(uint8_t slot);
+void set_feature_data(uint8_t slot, uint8_t reportId, uint8_t *data, uint16_t len);
+
+// Slot-BT_USB_SLOT conveniences for the USB bridge and the DSE profile module,
+// which both speak to the USB-exposed controller only.
+inline std::vector<uint8_t> get_feature_data(uint8_t reportId, uint16_t len) {
+    return get_feature_data(BT_USB_SLOT, reportId, len);
+}
+inline void set_feature_data(uint8_t reportId, uint8_t *data, uint16_t len) {
+    set_feature_data(BT_USB_SLOT, reportId, data, len);
+}
+
+// DSE profile module accessors (bound to slot BT_USB_SLOT). bt_feature_cached
+// copies the cached feature report (as received: leading report id byte
+// included) into `out` and returns true if present.
+uint16_t bt_control_cid();
+void bt_control_send(const uint8_t *data, uint16_t len);
+bool bt_feature_cached(uint8_t reportId, std::vector<uint8_t> &out);
+
+// Tells every connected DualSense to power off (same as a long-press of the
+// PS button). No-op for empty slots. Used on host-suspend so controllers
+// don't sit awake until their idle timers fire.
 void bt_dualsense_power_off();
 
-// Tick connection watchdog. Call from main loop.
+// Tick connection watchdogs (pre-ACL attempt + per-slot setup). Call from main loop.
 void bt_connection_watchdog_tick();
 
 //--------------------------------------------------------------------+
@@ -73,14 +96,16 @@ bool bt_bond_forget(const uint8_t *addr);
 // Forget every stored bond.
 void bt_bond_forget_all();
 
-// Force a fresh 30s inquiry to pair an additional controller, even when one is
-// already bonded. No-op while a controller is connected. Invoked from the web
-// API (POST /api/bonds action=pair); normally the dongle only inquires when no
-// controller is bonded.
-void bt_start_pairing();
+// Open a fresh 30s inquiry to pair an additional controller, even when
+// controllers are already bonded. Returns false (rejected) when every bond
+// seat is occupied, or when all slots are connected on a multi-slot build
+// (single-slot builds keep the upstream swap behavior: disconnect the active
+// controller, keep its bond, pair the new one). Invoked from the web API
+// (POST /api/bonds action=pair).
+bool bt_start_pairing();
 
-// If a controller is currently connected, copy its address into addr_out
-// (BT_ADDR_LEN bytes) and return true; otherwise return false.
+// If at least one controller is connected, copy the lowest connected slot's
+// address into addr_out (BT_ADDR_LEN bytes) and return true.
 bool bt_connected_addr(uint8_t *addr_out);
 
 // Flush the forgotten-controller blacklist to flash if it changed (deferred
