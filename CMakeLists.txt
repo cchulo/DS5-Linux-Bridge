@@ -33,6 +33,24 @@ endif ()
 option(PICO_W_BUILD "Build for Rasberry Pi Pico W (RP2040, audio is missing)" OFF)
 option(WAVESHARE_RP2350B_PLUS_W_BUILD "Build for Waveshare RP2350B-Plus-W (USB-C, 16MB flash, RM2 wireless)" OFF)
 
+# --- Multi-slot (Phase 1) ---
+# Number of concurrent DualSense controllers (1 = upstream single-controller
+# behavior). Sizes BTstack connection caps, USB HID interfaces, and slot state.
+set(MULTI_SLOT_COUNT 4 CACHE STRING "Concurrent controller slots (1-4)")
+if (MULTI_SLOT_COUNT LESS 1 OR MULTI_SLOT_COUNT GREATER 4)
+        message(FATAL_ERROR "MULTI_SLOT_COUNT must be 1-4 (got ${MULTI_SLOT_COUNT})")
+endif ()
+
+# --- Phase 2/3 hardware options: declared for pin-map stability, not yet
+# implemented. All default OFF; enabling one before its phase lands only
+# reserves the GPIO. See PLAN GPIO map (GP2 strip / GP3 power / GP4 matrix).
+option(ENABLE_POWER_PIN "Pulse a GPIO (optocoupler to PWR_SW header) as wake fallback" OFF)
+set(POWER_PIN_GPIO 3 CACHE STRING "GPIO for the power-button pulse")
+option(ENABLE_LED_STRIP "WS2812 slot/ambient LED strip via PIO" OFF)
+set(LED_STRIP_GPIO 2 CACHE STRING "GPIO for LED strip data")
+option(ENABLE_LED_MATRIX "8x8 WS2812B info matrix via PIO" OFF)
+set(LED_MATRIX_GPIO 4 CACHE STRING "GPIO for LED matrix data")
+
 if (PICO_W_BUILD AND WAVESHARE_RP2350B_PLUS_W_BUILD)
         message(FATAL_ERROR "PICO_W_BUILD and WAVESHARE_RP2350B_PLUS_W_BUILD are mutually exclusive")
 endif ()
@@ -231,6 +249,7 @@ if (WAVESHARE_RP2350B_PLUS_W_BUILD)
 endif ()
 
 target_compile_definitions(ds5-bridge PRIVATE
+        MULTI_SLOT_COUNT=${MULTI_SLOT_COUNT}
         CYW43_LWIP=0
         # 0 (not 1): flash_safe_execute() must really park core1 while flash is
         # erased/programmed (config_save). With =1 the lockout is skipped and the
