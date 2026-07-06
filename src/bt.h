@@ -67,6 +67,13 @@ uint16_t bt_control_cid();
 void bt_control_send(const uint8_t *data, uint16_t len);
 bool bt_feature_cached(uint8_t reportId, std::vector<uint8_t> &out);
 
+// Like bt_feature_cached but searches every connected slot's cache (lowest
+// slot wins). Used to synthesize plausible feature reports for EMPTY slots so
+// hid-playstation's bind-time probes (calibration 0x05, firmware 0x20,
+// pairing 0x09) don't stall an interface whose controller hasn't connected
+// yet.
+bool bt_feature_cached_any(uint8_t reportId, std::vector<uint8_t> &out);
+
 // Tells every connected DualSense to power off (same as a long-press of the
 // PS button). No-op for empty slots. Used on host-suspend so controllers
 // don't sit awake until their idle timers fire.

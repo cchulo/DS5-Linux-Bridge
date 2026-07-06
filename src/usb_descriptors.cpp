@@ -26,6 +26,7 @@
 #include "bsp/board_api.h"
 #include "tusb.h"
 #include "config.h"
+#include "slots.h"
 
 bool ds_mode() {
     if (get_config().controller_mode == 2) {
@@ -34,13 +35,22 @@ bool ds_mode() {
     return get_config().controller_mode == 0;
 }
 
+// Per-slot gamepad endpoints (emitted inline in the config descriptor below):
+// slot 0 keeps the original IN 0x84 / OUT 0x03 pair; slots 1-3 use
+// 0x88/0x08, 0x89/0x09, 0x8A/0x0A — clear of audio (0x01/0x82), NCM
+// (0x85/0x86/0x05) and the keyboard (0x87). RP2040/RP2350 expose 16 EP
+// numbers per direction, so 4 gamepads + everything else fits.
+
 enum {
     ITF_NUM_AUDIO_CONTROL = 0,
     ITF_NUM_AUDIO_STREAMING_OUT,
     ITF_NUM_AUDIO_STREAMING_IN,
+    // MULTI_SLOT_COUNT consecutive gamepad interfaces; slot i is interface
+    // ITF_NUM_HID + i and HID instance i (TinyUSB numbers HID instances in
+    // descriptor parse order).
     ITF_NUM_HID,
 #ifdef ENABLE_WEBCONFIG
-    ITF_NUM_NET,       // CDC-NCM control (IAD spans control + data)
+    ITF_NUM_NET = ITF_NUM_HID + MULTI_SLOT_COUNT, // CDC-NCM control (IAD spans control + data)
     ITF_NUM_NET_DATA,
 #endif
 #ifdef ENABLE_WAKE_HID
@@ -57,7 +67,13 @@ enum {
 #else
         0,
 #endif
-    CONFIG_DESC_LEN_BASE = 0x00E3 + CONFIG_DESC_LEN_AUDIO_IAD,
+    // One gamepad interface block: 9 (interface) + 9 (HID class) + 7 (EP IN)
+    // + 7 (EP OUT) = 32 bytes.
+    CONFIG_DESC_LEN_GAMEPAD = 32,
+    // 0x00E3 covers config header + audio function + ONE gamepad block (the
+    // upstream single-controller descriptor); extra slots add a block each.
+    CONFIG_DESC_LEN_BASE = 0x00E3 + CONFIG_DESC_LEN_AUDIO_IAD
+        + (MULTI_SLOT_COUNT - 1) * CONFIG_DESC_LEN_GAMEPAD,
     // Keyboard interface adds 25 bytes:
     //   9 (interface) + 9 (HID class) + 7 (EP IN) = 25
     CONFIG_DESC_LEN_WAKE_KBD =
@@ -141,6 +157,22 @@ enum {
     7, TUSB_DESC_ENDPOINT, 0x05, TUSB_XFER_BULK, U16_TO_U8S_LE(64), 0
 #endif // ENABLE_WEBCONFIG
 
+// DualSense gamepad HID interface block, parameterised by interface number and
+// endpoint pair. 32 bytes (CONFIG_DESC_LEN_GAMEPAD): 9 (interface) + 9 (HID
+// class) + 7 (EP IN) + 7 (EP OUT). wDescriptorLength defaults to the DS value
+// (0x0111) and both it and the EP bIntervals are patched at descriptor-fetch
+// time in tud_descriptor_configuration_cb() — the patch loop walks blocks by
+// this fixed size, so keep the layout in sync with the offsets there.
+#define DS5_GAMEPAD_ITF_DESC(itf, ep_in, ep_out) \
+    /* Interface: HID gamepad, 2 endpoints */ \
+    0x09, 0x04, (itf), 0x00, 0x02, 0x03, 0x00, 0x00, 0x00, \
+    /* HID descriptor: bcdHID 1.11, report descriptor length 0x0111 (DS) */ \
+    0x09, 0x21, 0x11, 0x01, 0x00, 0x01, 0x22, 0x11, 0x01, \
+    /* Endpoint IN: interrupt, 64 bytes, bInterval 1 */ \
+    0x07, 0x05, (ep_in), 0x03, 0x40, 0x00, 0x01, \
+    /* Endpoint OUT: interrupt, 64 bytes, bInterval 1 */ \
+    0x07, 0x05, (ep_out), 0x03, 0x40, 0x00, 0x01
+
 #ifdef ENABLE_WAKE_HID
 // Boot-keyboard interface (HID), parameterised by interface number. EP IN 0x87.
 // 25 bytes: 9 (interface) + 9 (HID class) + 7 (EP IN).
@@ -158,22 +190,43 @@ enum {
     0x09, 0x21, 0x11, 0x01, 0x00, 0x01, 0x22, 0x15, 0x00, \
     0x07, 0x05, 0x84, 0x03, 0x40, 0x00, 0x0A
 
-// Inert padding occupying MINIMAL's interfaces 0..2 so NCM lands on the same
-// number (4) as in FULL. The three vendor-specific (0xFF), zero-endpoint
-// interfaces are grouped under ONE Interface Association Descriptor so the
-// Windows composite parent (usbccgp) creates a single child function for them
-// instead of collapsing the consecutive same-class interfaces into one unnamed
-// unknown device. A WinUSB compatible-ID on the IAD's bFirstInterface (see the
-// MINIMAL-only desc_ms_os_20_minimal) then binds that function to WinUSB -> no
-// yellow bang. That tag is MINIMAL-only on purpose: in FULL interface 0 is audio
-// and must NOT be tagged WinUSB. 8 (IAD) + 3*9 (interfaces) = 35 bytes.
+// Inert padding occupying MINIMAL's leading interfaces so NCM lands on the
+// same number as in FULL. FULL has 3 audio + MULTI_SLOT_COUNT gamepad
+// interfaces before NCM; MINIMAL fills those seats with (MULTI_SLOT_COUNT+2)
+// inert vendor interfaces plus the single dummy HID. The vendor-specific
+// (0xFF), zero-endpoint interfaces are grouped under ONE Interface Association
+// Descriptor so the Windows composite parent (usbccgp) creates a single child
+// function for them instead of collapsing the consecutive same-class
+// interfaces into one unnamed unknown device. A WinUSB compatible-ID on the
+// IAD's bFirstInterface (see the MINIMAL-only desc_ms_os_20_minimal) then
+// binds that function to WinUSB -> no yellow bang. That tag is MINIMAL-only on
+// purpose: in FULL interface 0 is audio and must NOT be tagged WinUSB.
+// 8 (IAD) + (MULTI_SLOT_COUNT+2)*9 (interfaces) bytes.
+#define DS5_INERT_PAD_ITF_COUNT (MULTI_SLOT_COUNT + 2)
+#define DS5_INERT_ITF(itf) 0x09, 0x04, (itf), 0x00, 0x00, 0xFF, 0x00, 0x00, 0x00
 #define DS5_INERT_PAD_DESC(first_itf) \
-    /* IAD: groups the 3 inert vendor interfaces into one function */ \
-    0x08, TUSB_DESC_INTERFACE_ASSOCIATION, (first_itf), 0x03, 0xFF, 0x00, 0x00, 0x00, \
-    0x09, 0x04, (first_itf),       0x00, 0x00, 0xFF, 0x00, 0x00, 0x00, \
-    0x09, 0x04, (first_itf) + 1,   0x00, 0x00, 0xFF, 0x00, 0x00, 0x00, \
-    0x09, 0x04, (first_itf) + 2,   0x00, 0x00, 0xFF, 0x00, 0x00, 0x00
-#define DS5_INERT_PAD_DESC_LEN (8 + 3 * 9)
+    /* IAD: groups the inert vendor interfaces into one function */ \
+    0x08, TUSB_DESC_INTERFACE_ASSOCIATION, (first_itf), DS5_INERT_PAD_ITF_COUNT, \
+        0xFF, 0x00, 0x00, 0x00, \
+    DS5_INERT_ITF((first_itf)), \
+    DS5_INERT_ITF((first_itf) + 1), \
+    DS5_INERT_ITF((first_itf) + 2)
+#if MULTI_SLOT_COUNT >= 2
+#define DS5_INERT_PAD_EXTRA_2(first_itf) , DS5_INERT_ITF((first_itf) + 3)
+#else
+#define DS5_INERT_PAD_EXTRA_2(first_itf)
+#endif
+#if MULTI_SLOT_COUNT >= 3
+#define DS5_INERT_PAD_EXTRA_3(first_itf) , DS5_INERT_ITF((first_itf) + 4)
+#else
+#define DS5_INERT_PAD_EXTRA_3(first_itf)
+#endif
+#if MULTI_SLOT_COUNT >= 4
+#define DS5_INERT_PAD_EXTRA_4(first_itf) , DS5_INERT_ITF((first_itf) + 5)
+#else
+#define DS5_INERT_PAD_EXTRA_4(first_itf)
+#endif
+#define DS5_INERT_PAD_DESC_LEN (8 + DS5_INERT_PAD_ITF_COUNT * 9)
 #endif // ENABLE_WAKE_HID
 
 //--------------------------------------------------------------------+
@@ -459,42 +512,20 @@ uint8_t descriptor_configuration[] = {
     0x00, // Lock Delay Units
     0x00, 0x00, // Lock Delay
 
-    // --- INTERFACE DESCRIPTOR (3.0): HID (DualSense 5 Gamepad + Touchpad) ---
-    0x09, // bLength
-    0x04, // bDescriptorType (INTERFACE)
-    0x03, // bInterfaceNumber: 3
-    0x00, // bAlternateSetting: 0
-    0x02, // bNumEndpoints: 2 (IN + OUT)
-    0x03, // bInterfaceClass: HID
-    0x00, // bInterfaceSubClass: None
-    0x00, // bInterfaceProtocol: None
-    0x00, // iInterface
-
-    // HID Descriptor
-    0x09, // bLength: 9
-    0x21, // bDescriptorType (HID)
-    0x11, 0x01, // bcdHID: 1.11
-    0x00, // bCountryCode: Not localized
-    0x01, // bNumDescriptors: 1 report descriptor
-    0x22, // bDescriptorType: Report
-    0x11, 0x01, // wDescriptorLength: 273 (0x0111) DS
-    // 0x85, 0x01, // wDescriptorLength: 389 (0x0185) DSE
-
-    // Endpoint Descriptor (HID IN: EP4)
-    0x07, // bLength
-    0x05, // bDescriptorType (ENDPOINT)
-    0x84, // bEndpointAddress: IN EP4
-    0x03, // bmAttributes: Interrupt
-    0x40, 0x00, // wMaxPacketSize: 64
-    0x01, // bInterval: 1 (polling every 4ms -> 1ms)
-
-    // Endpoint Descriptor (HID OUT: EP3)
-    0x07, // bLength
-    0x05, // bDescriptorType (ENDPOINT)
-    0x03, // bEndpointAddress: OUT EP3
-    0x03, // bmAttributes: Interrupt
-    0x40, 0x00, // wMaxPacketSize: 64
-    0x01, // bInterval: 1 (polling every 4ms -> 1ms)
+    // --- INTERFACE DESCRIPTORS (3..3+N-1): HID DualSense gamepads, one per
+    // slot. Slot 0 keeps the upstream interface number (3) and endpoints
+    // (IN 0x84 / OUT 0x03); wDescriptorLength (DS vs DSE) and the EP
+    // bIntervals (polling rate) are patched at fetch time for every block.
+    DS5_GAMEPAD_ITF_DESC(ITF_NUM_HID, 0x84, 0x03),
+#if MULTI_SLOT_COUNT >= 2
+    DS5_GAMEPAD_ITF_DESC(ITF_NUM_HID + 1, 0x88, 0x08),
+#endif
+#if MULTI_SLOT_COUNT >= 3
+    DS5_GAMEPAD_ITF_DESC(ITF_NUM_HID + 2, 0x89, 0x09),
+#endif
+#if MULTI_SLOT_COUNT >= 4
+    DS5_GAMEPAD_ITF_DESC(ITF_NUM_HID + 3, 0x8A, 0x0A),
+#endif
 
 #ifdef ENABLE_WEBCONFIG
     // --- CDC-NCM (config web UI network interface) at ITF_NUM_NET / +1 ---
@@ -551,19 +582,21 @@ static_assert(sizeof(descriptor_configuration) == CONFIG_DESC_LEN_TOTAL,
 // padding lives entirely in MINIMAL. Interface numbers stay ascending, so Windows
 // accepts the config (it rejects out-of-order interfaces).
 #ifdef ENABLE_WEBCONFIG
-// MINIMAL interface numbers (mirror FULL up to and including NCM).
+// MINIMAL interface numbers (mirror FULL up to and including NCM). The inert
+// pad covers MULTI_SLOT_COUNT+2 interfaces so the dummy HID sits where FULL's
+// LAST gamepad does and NCM/kbd keep their FULL interface numbers.
 enum {
     MIN_ITF_INERT0 = 0,
-    MIN_ITF_INERT1,
-    MIN_ITF_INERT2,
-    MIN_ITF_DUMMY_HID,   // 3 -- gamepad's slot in FULL; HID instance 0
-    MIN_ITF_NET,         // 4 -- NCM control (same as FULL ITF_NUM_NET)
-    MIN_ITF_NET_DATA,    // 5
-    MIN_ITF_HID_KBD,     // 6 -- HID instance 1
+    MIN_ITF_DUMMY_HID = DS5_INERT_PAD_ITF_COUNT, // FULL's last gamepad seat; HID instance 0
+    MIN_ITF_NET,         // NCM control (same number as FULL ITF_NUM_NET)
+    MIN_ITF_NET_DATA,
+    MIN_ITF_HID_KBD,     // HID instance 1
     MIN_ITF_TOTAL
 };
+static_assert(MIN_ITF_NET == ITF_NUM_NET && MIN_ITF_HID_KBD == ITF_NUM_HID_KBD,
+              "MINIMAL must keep NCM/kbd on the same interface numbers as FULL");
 //   Config descriptor                 9
-//   Inert pad (IAD + 3 vendor itfs)   DS5_INERT_PAD_DESC_LEN (35)
+//   Inert pad (IAD + N+2 vendor itfs) DS5_INERT_PAD_DESC_LEN
 //   Dummy HID interface + HID + EP    25
 //   CDC-NCM block                     TUD_CDC_NCM_DESC_LEN (85)
 //   Kbd interface + HID + EP          25
@@ -580,14 +613,18 @@ uint8_t descriptor_configuration_minimal[CONFIG_DESC_LEN_MINIMAL] = {
     0xE0, // bmAttributes: SELF-POWERED + REMOTE-WAKEUP (must keep for wake)
     0xFA, // bMaxPower: 500mA
 
-    // Interfaces 0-2: inert vendor padding (one IAD-grouped WinUSB function) so
-    // NCM lands on interface 4-5 as in FULL.
-    DS5_INERT_PAD_DESC(MIN_ITF_INERT0),
-    // Interface 3: dummy HID placeholder (HID instance 0, keeps kbd at instance 1).
+    // Leading interfaces: inert vendor padding (one IAD-grouped WinUSB
+    // function) so NCM lands on the same interface numbers as in FULL.
+    DS5_INERT_PAD_DESC(MIN_ITF_INERT0)
+    DS5_INERT_PAD_EXTRA_2(MIN_ITF_INERT0)
+    DS5_INERT_PAD_EXTRA_3(MIN_ITF_INERT0)
+    DS5_INERT_PAD_EXTRA_4(MIN_ITF_INERT0),
+    // Dummy HID placeholder (HID instance 0, keeps the kbd's instance stable
+    // within this variant).
     DS5_DUMMY_HID_ITF_DESC(MIN_ITF_DUMMY_HID),
-    // Interfaces 4-5: CDC-NCM, SAME bytes/number as FULL (single source DS5_NCM_DESC).
+    // CDC-NCM, SAME bytes/number as FULL (single source DS5_NCM_DESC).
     DS5_NCM_DESC(MIN_ITF_NET),
-    // Interface 6: boot keyboard (HID instance 1).
+    // Boot keyboard (HID instance 1).
     DS5_KBD_ITF_DESC(MIN_ITF_HID_KBD),
 };
 #else // ENABLE_WAKE_HID && !ENABLE_WEBCONFIG -- legacy kbd-only minimal
@@ -621,11 +658,16 @@ static volatile desc_variant_t active_variant = DESC_VARIANT_MINIMAL;
 void usb_set_descriptor_variant_full(void)    { active_variant = DESC_VARIANT_FULL; }
 void usb_set_descriptor_variant_minimal(void) { active_variant = DESC_VARIANT_MINIMAL; }
 bool usb_descriptor_variant_is_full(void)     { return active_variant == DESC_VARIANT_FULL; }
-// The boot keyboard is HID instance 1 in BOTH variants: in FULL the gamepad is
-// instance 0 (its interface is parsed first), and MINIMAL keeps a dummy HID at
-// instance 0 so the kbd stays instance 1. Stable across variant swaps -- this
-// is what makes the "rogue keyboard on wake" structurally impossible.
-uint8_t usb_kbd_hid_instance(void) { return 1; }
+// The boot keyboard is the HID instance AFTER the gamepad seats: instance
+// MULTI_SLOT_COUNT in FULL (gamepads occupy 0..MULTI_SLOT_COUNT-1) and
+// instance 1 in MINIMAL (one dummy HID occupies instance 0). Computed from
+// the active variant so a gamepad report (addressed to instances 0..N-1) can
+// never land on the keyboard — the structural "rogue keyboard on wake" fix.
+// (With MULTI_SLOT_COUNT == 1 this is the upstream constant 1 in both
+// variants.)
+uint8_t usb_kbd_hid_instance(void) {
+    return active_variant == DESC_VARIANT_FULL ? MULTI_SLOT_COUNT : 1;
+}
 
 //--------------------------------------------------------------------+
 // Variant swap orchestrator
@@ -746,13 +788,22 @@ uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {
             bInterval = 0x01;
             break;
     }
-    constexpr auto offset = CONFIG_DESC_LEN_BASE;
-    descriptor_configuration[offset - 1] = bInterval;
-    descriptor_configuration[offset - 8] = bInterval;
-    if (ds_mode()) {
-        descriptor_configuration[offset - 16] = 0x11; // DS report desc low byte (0x0111 = 273)
-    }else {
-        descriptor_configuration[offset - 16] = 0x85; // DSE report desc low byte (0x0185 = 389)
+    // Patch every gamepad block. CONFIG_DESC_LEN_BASE is the length up to the
+    // end of the LAST gamepad block; blocks are consecutive 32-byte
+    // (CONFIG_DESC_LEN_GAMEPAD) units, so block i (0-based) ends at
+    // CONFIG_DESC_LEN_BASE - (N-1-i)*32. Within a block (relative to its
+    // end): -1 = EP OUT bInterval, -8 = EP IN bInterval, -16 =
+    // wDescriptorLength low byte (DS 0x0111 vs DSE 0x0185; the high bytes
+    // 0x01 coincide). All interfaces share the device's DS/DSE identity —
+    // there is one VID/PID for the whole composite, chosen by
+    // ds_mode() (config override, else the USB-exposed slot's model).
+    const uint8_t report_len_lo = ds_mode() ? 0x11 : 0x85;
+    for (int i = 0; i < MULTI_SLOT_COUNT; i++) {
+        const size_t end = CONFIG_DESC_LEN_BASE
+            - (size_t) (MULTI_SLOT_COUNT - 1 - i) * CONFIG_DESC_LEN_GAMEPAD;
+        descriptor_configuration[end - 1] = bInterval;
+        descriptor_configuration[end - 8] = bInterval;
+        descriptor_configuration[end - 16] = report_len_lo;
     }
     return descriptor_configuration;
 }
@@ -1171,14 +1222,16 @@ _Static_assert(sizeof(desc_hid_report_dummy) == 21, "dummy report descriptor len
 // Descriptor contents must exist long enough for transfer to complete
 uint8_t const *tud_hid_descriptor_report_cb(uint8_t itf) {
 #ifdef ENABLE_WAKE_HID
-    // HID instance indices are STABLE across variants:
-    //   instance 1 = boot keyboard (both variants)
-    //   instance 0 = real gamepad in FULL, inert dummy HID in MINIMAL
+    // HID instance layout per variant (usb_kbd_hid_instance() is computed):
+    //   FULL    : instances 0..MULTI_SLOT_COUNT-1 = gamepads, then keyboard
+    //   MINIMAL : instance 0 = inert dummy HID, instance 1 = keyboard
     if (itf == usb_kbd_hid_instance()) return desc_hid_report_kbd;
-    // Instance 0 in MINIMAL is the dummy placeholder; serve its descriptor.
+    // Non-keyboard instance in MINIMAL is the dummy placeholder.
     if (active_variant == DESC_VARIANT_MINIMAL) return desc_hid_report_dummy;
 #endif
     (void) itf;
+    // Every gamepad instance serves the same report descriptor (one device
+    // identity for the whole composite).
     if (ds_mode()) {
         return desc_hid_report_ds;
     }

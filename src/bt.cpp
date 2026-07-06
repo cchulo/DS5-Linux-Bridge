@@ -1166,6 +1166,17 @@ bool bt_feature_cached(uint8_t reportId, vector<uint8_t> &out) {
     return true;
 }
 
+bool bt_feature_cached_any(uint8_t reportId, vector<uint8_t> &out) {
+    for (auto &s : slots) {
+        if (s.acl_handle == HCI_CON_HANDLE_INVALID) continue;
+        auto it = s.feature_data.find(reportId);
+        if (it == s.feature_data.end()) continue;
+        out = it->second;
+        return true;
+    }
+    return false;
+}
+
 void bt_write(uint8_t slot, const uint8_t *data, const uint16_t len, bool kick) {
     if (slot >= BT_MAX_SLOTS) return;
     bt_slot &s = slots[slot];

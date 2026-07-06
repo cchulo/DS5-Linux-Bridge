@@ -27,7 +27,9 @@
 #include "pico/critical_section.h"
 #include "pico/time.h"
 
-int reportSeqCounter = 0;
+// Per-slot sequence counter for outgoing BT 0x31 output reports (audio.cpp
+// keeps its own for the audio-frame path).
+int reportSeqCounter[BT_MAX_SLOTS] = {};
 uint8_t packetCounter = 0;
 bool spk_active = false;
 bool mic_active = false;
@@ -54,64 +56,76 @@ volatile bool report_dirty[BT_MAX_SLOTS] = {};
 
 void interrupt_loop() {
 #ifdef ENABLE_WAKE_HID
-  // Only the FULL variant exposes the real gamepad (HID instance 0). In MINIMAL
-  // instance 0 is an inert dummy HID, so don't emit gamepad reports there.
-  // (The keyboard is instance 1 in BOTH variants, so a gamepad report can never
-  // reach it regardless -- see usb_descriptors.cpp. This guard just avoids
-  // pushing reports at the dummy / before the controller is connected.)
+  // Only the FULL variant exposes real gamepads (HID instances
+  // 0..BT_MAX_SLOTS-1). In MINIMAL instance 0 is an inert dummy HID, so don't
+  // emit gamepad reports there. (The keyboard instance is computed per
+  // variant, so a gamepad report can never reach it regardless -- see
+  // usb_descriptors.cpp. This guard just avoids pushing reports at the dummy
+  // / before any controller is connected.)
   if (!usb_descriptor_variant_is_full())
     return;
 #endif
-  if (!tud_hid_ready())
-    return;
 
-  // TODO: Refactor for better code reuse
-  if (get_config().polling_rate_mode != 2) {
-    if (!tud_hid_report(0x01, interrupt_in_data[BT_USB_SLOT], 63)) {
-      printf("[USBHID] tud_hid_report error\n");
+  const bool realtime = get_config().polling_rate_mode == 2;
+  for (uint8_t slot = 0; slot < BT_MAX_SLOTS; slot++) {
+    if (!tud_hid_n_ready(slot))
+      continue;
+
+    if (!realtime) {
+      // Fixed-cadence mode: re-send the latest buffer every iteration; empty
+      // slots keep reporting their neutral idle state.
+      if (!tud_hid_n_report(slot, 0x01, interrupt_in_data[slot], 63)) {
+        printf("[USBHID] tud_hid_report error (slot %u)\n", slot);
+      }
+      continue;
     }
-    return;
-  }
 
-  bool should_send = false;
-  // Local buffer to hold the report data while we prepare it to send.
-  uint8_t safe_report[63];
+    // Real-time (1000 Hz) mode: send only when fresh BT data arrived.
+    bool should_send = false;
+    // Local buffer to hold the report data while we prepare it to send.
+    uint8_t safe_report[63];
 
-  critical_section_enter_blocking(&report_cs);
-  if (report_dirty[BT_USB_SLOT]) {
-    memcpy(safe_report, interrupt_in_data[BT_USB_SLOT], 63);
-    report_dirty[BT_USB_SLOT] = false;
-    should_send = true;
-  }
-  critical_section_exit(&report_cs);
+    critical_section_enter_blocking(&report_cs);
+    if (report_dirty[slot]) {
+      memcpy(safe_report, interrupt_in_data[slot], 63);
+      report_dirty[slot] = false;
+      should_send = true;
+    }
+    critical_section_exit(&report_cs);
 
-  // Only send to TinyUSB if we actually grabbed fresh data
-  if (should_send) {
-    if (!tud_hid_report(0x01, safe_report, 63)) {
-      printf("[USBHID] tud_hid_report error\n");
+    // Only send to TinyUSB if we actually grabbed fresh data
+    if (should_send) {
+      if (!tud_hid_n_report(slot, 0x01, safe_report, 63)) {
+        printf("[USBHID] tud_hid_report error (slot %u)\n", slot);
 
-      // If the report failed to queue, restore the dirty flag
-      // so we try again on the next loop iteration.
-      critical_section_enter_blocking(&report_cs);
-      report_dirty[BT_USB_SLOT] = true;
-      critical_section_exit(&report_cs);
+        // If the report failed to queue, restore the dirty flag
+        // so we try again on the next loop iteration.
+        critical_section_enter_blocking(&report_cs);
+        report_dirty[slot] = true;
+        critical_section_exit(&report_cs);
+      }
     }
   }
+}
+
+// Push one slot's cached output state to its controller as a BT 0x31 report.
+static void state_push_slot_to_bt(uint8_t slot) {
+  uint8_t outputData[78]{};
+  outputData[0] = 0x31;
+  outputData[1] = reportSeqCounter[slot] << 4;
+  if (++reportSeqCounter[slot] == 256) {
+    reportSeqCounter[slot] = 0;
+  }
+  outputData[2] = 0x10;
+  state_get(slot, outputData + 3, sizeof(SetStateData));
+  bt_write(slot, outputData, sizeof(outputData));
 }
 
 void state_push_to_bt() {
   if (spk_active) {
     return;
   }
-  uint8_t outputData[78]{};
-  outputData[0] = 0x31;
-  outputData[1] = reportSeqCounter << 4;
-  if (++reportSeqCounter == 256) {
-    reportSeqCounter = 0;
-  }
-  outputData[2] = 0x10;
-  state_get(BT_USB_SLOT, outputData + 3, sizeof(SetStateData));
-  bt_write(BT_USB_SLOT, outputData, sizeof(outputData));
+  state_push_slot_to_bt(BT_USB_SLOT);
 }
 
 void on_bt_data(uint8_t slot, CHANNEL_TYPE channel, uint8_t *data,
@@ -215,28 +229,58 @@ uint16_t tud_hid_get_report_cb(uint8_t itf, uint8_t report_id,
     }
     return 0;
   }
-  // MINIMAL instance 0 is the inert dummy HID, NOT the gamepad. Don't route its
-  // GET_REPORT into the BT feature path (which would query a controller that
-  // isn't connected). Return 0 (STALL); the host never reads it.
+  // MINIMAL's non-keyboard instance is the inert dummy HID, NOT a gamepad.
+  // Don't route its GET_REPORT into the BT feature path (which would query a
+  // controller that isn't connected). Return 0 (STALL); the host never reads
+  // it.
   if (!usb_descriptor_variant_is_full()) {
     return 0;
   }
 #endif
-  (void)itf;
-  (void)report_id;
   (void)report_type;
-  (void)buffer;
-  (void)reqlen;
 
-  // DSE profiles: while the unlock + prefetch is still in progress, return 0
-  // (NAK) for profile reads so the PS app retries rather than caching an
-  // empty snapshot. Still kick off the background BT fetch.
-  if (dse_is_profile_report(report_id) && !dse_profiles_ready()) {
-    get_feature_data(report_id, reqlen);
+  // In FULL, gamepad HID instance i == slot i.
+  const uint8_t slot = itf;
+  if (slot >= BT_MAX_SLOTS) {
     return 0;
   }
 
-  std::vector<uint8_t> feature_data = get_feature_data(report_id, reqlen);
+  BtStatus st;
+  bt_get_status(slot, &st);
+  if (!st.connected) {
+    // Empty slot: serve a plausible blob from any connected pad so
+    // hid-playstation's bind-time probes (calibration 0x05, firmware 0x20,
+    // pairing 0x09) don't stall the interface — a stalled probe would fail
+    // the driver bind and the slot would stay dead when a pad later takes
+    // it. Caveat (documented in docs/host-compat.md): a pad that connects
+    // into this slot AFTER enumeration inherits the placeholder IMU
+    // calibration until the next re-enumeration.
+    std::vector<uint8_t> ph;
+    if (!bt_feature_cached_any(report_id, ph) || ph.size() <= 1) {
+      return 0;
+    }
+    size_t n = ph.size() - 1;
+    if (n > reqlen) n = reqlen;
+    memcpy(buffer, ph.data() + 1, n);
+    if (report_id == 0x09 && n >= 6) {
+      // Pairing info carries the controller MAC, which hosts use as the
+      // device's unique id — make each empty slot's MAC distinct.
+      buffer[0] ^= (uint8_t)(slot + 1);
+    }
+    return (uint16_t) n;
+  }
+
+  // DSE profiles: while the unlock + prefetch is still in progress, return 0
+  // (NAK) for profile reads so the PS app retries rather than caching an
+  // empty snapshot. Still kick off the background BT fetch. (The DSE profile
+  // machinery serves the USB-exposed slot only.)
+  if (slot == BT_USB_SLOT && dse_is_profile_report(report_id) &&
+      !dse_profiles_ready()) {
+    get_feature_data(slot, report_id, reqlen);
+    return 0;
+  }
+
+  std::vector<uint8_t> feature_data = get_feature_data(slot, report_id, reqlen);
   if (!feature_data.empty()) {
     memcpy(buffer, feature_data.data() + 1, feature_data.size() - 1);
   }
@@ -271,42 +315,37 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id,
     // Drop keyboard SET_REPORT (host LED state).
     return;
   }
-  // MINIMAL instance 0 is the inert dummy HID; ignore any report to it.
+  // MINIMAL's non-keyboard instance is the inert dummy HID; ignore reports.
   if (!usb_descriptor_variant_is_full()) {
     return;
   }
 #endif
-  (void)itf;
-  (void)report_id;
   (void)report_type;
-  (void)buffer;
-  (void)bufsize;
+
+  // In FULL, gamepad HID instance i == slot i.
+  const uint8_t slot = itf;
+  if (slot >= BT_MAX_SLOTS) {
+    return;
+  }
 
   // INTERRUPT OUT
   if (report_id == 0) {
     switch (buffer[0]) {
     case 0x02: {
-      state_update(BT_USB_SLOT, buffer + 1, bufsize - 1);
-      // When the headset/speaker is active, output reports normally piggyback
-      // on the audio frame path, so we defer (break) here to avoid double-send.
-      // But a rumble-bearing SetStateData (UseRumbleNotHaptics flags set) must
-      // go out NOW, or rumble lags/drops a frame while audio is streaming.
+      state_update(slot, buffer + 1, bufsize - 1);
+      // When the headset/speaker is active, output reports for the audio
+      // slot normally piggyback on the audio frame path, so we defer (break)
+      // here to avoid double-send. But a rumble-bearing SetStateData
+      // (UseRumbleNotHaptics flags set) must go out NOW, or rumble
+      // lags/drops a frame while audio is streaming. Non-audio slots have no
+      // frame to piggyback on and always send immediately.
       // (Ported from upstream awalol/DS5Dongle 07ecbb3, issue #182.)
       bool send_now = ((buffer[1] >> 1) & 1) ||  // UseRumbleNotHaptics
                       ((buffer[39] >> 3) & 1);   // UseRumbleNotHaptics2
-      if (!send_now && spk_active) {
+      if (!send_now && slot == BT_USB_SLOT && spk_active) {
         break;
       }
-      uint8_t outputData[78]{};
-      outputData[0] = 0x31;
-      outputData[1] = reportSeqCounter << 4;
-      if (++reportSeqCounter == 256) {
-        reportSeqCounter = 0;
-      }
-      outputData[2] = 0x10;
-      // memcpy(outputData + 3, buffer + 1, bufsize - 1);
-      state_get(BT_USB_SLOT, outputData + 3, sizeof(SetStateData));
-      bt_write(BT_USB_SLOT, outputData, sizeof(outputData));
+      state_push_slot_to_bt(slot);
       break;
     }
     }
@@ -314,7 +353,7 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id,
   if (report_id == 0x80 ||
       // DSE: Write Profile Block
       report_id == 0x60 || report_id == 0x62 || report_id == 0x61) {
-    set_feature_data(report_id, const_cast<uint8_t *>(buffer), bufsize);
+    set_feature_data(slot, report_id, const_cast<uint8_t *>(buffer), bufsize);
     return;
   }
 }

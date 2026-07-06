@@ -92,10 +92,15 @@
 
 //------------- CLASS -------------//
 #define CFG_TUD_AUDIO             1
+// One HID instance per controller slot, plus the wake keyboard. The MINIMAL
+// variant only populates two (dummy + keyboard); instances are sized for FULL.
+#ifndef MULTI_SLOT_COUNT
+#define MULTI_SLOT_COUNT 1
+#endif
 #ifdef ENABLE_WAKE_HID
-#define CFG_TUD_HID               2
+#define CFG_TUD_HID               (MULTI_SLOT_COUNT + 1)
 #else
-#define CFG_TUD_HID               1
+#define CFG_TUD_HID               MULTI_SLOT_COUNT
 #endif
 #define CFG_TUD_CDC               0
 // CDC-NCM network interface carrying the onboard config web UI (ENABLE_WEBCONFIG,
