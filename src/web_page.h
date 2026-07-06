@@ -48,12 +48,15 @@ h2{font-size:1.1rem;margin-bottom:.3rem}
 .bond button.fg,button.fg{background:#7f1d1d}
 .btns{display:flex;gap:.5rem;align-items:center}
 #bonds_empty{color:#888;font-size:.9rem}
-#statuscard{display:flex;align-items:center;gap:1rem;flex-wrap:wrap;background:#1a1a1a;border:1px solid #333;border-radius:8px;padding:.7rem 1rem;margin:1rem 0}
-#statuscard .dot{width:.6rem;height:.6rem;border-radius:50%;background:#555;flex:none}
-#statuscard.on .dot{background:#4ade80}
-#statuscard .s{font-size:.9rem}
-#statuscard .s b{color:#fff}
-#statuscard .muted{color:#888}
+#statuscard{display:flex;flex-direction:column;gap:.55rem;background:#1a1a1a;border:1px solid #333;border-radius:8px;padding:.7rem 1rem;margin:1rem 0}
+.slotrow{display:flex;align-items:center;gap:.55rem;flex-wrap:wrap}
+.slotrow .dot{width:.6rem;height:.6rem;border-radius:50%;background:#555;flex:none}
+.slotrow .s{font-size:.9rem}
+.slotrow .s b{color:#fff}
+.slotrow.off .s{color:#777}
+.slotrow .lowb{color:#f87171}
+.chip{font-size:.72rem;color:#9ca3af;background:#252525;border:1px solid #3a3a3a;border-radius:999px;padding:.1rem .5rem;white-space:nowrap}
+.chip.aud{color:#93c5fd;border-color:#1e3a8a}
 .batt{display:inline-flex;align-items:center;gap:.35rem}
 .batt .bar{width:34px;height:14px;border:1px solid #888;border-radius:2px;position:relative;padding:1px}
 .batt .bar::after{content:"";position:absolute;right:-3px;top:4px;width:2px;height:6px;background:#888}
@@ -288,6 +291,7 @@ $('forgetall').onclick=()=>{
 // ----- Live status (GET /api/slots) -----
 const SLOT_COLORS=['#3b82f6','#ef4444','#22c55e','#ec4899'];
 let lastSlots=null;
+function chip(txt,extra){const c=document.createElement('span');c.className='chip'+(extra?' '+extra:'');c.textContent=txt;return c}
 function slotRow(d,s){
   const row=document.createElement('div');
   row.className='slotrow'+(s.connected?'':' off');
@@ -295,23 +299,25 @@ function slotRow(d,s){
   if(s.connected)dot.style.background=d.max>1?SLOT_COLORS[s.slot%4]:'#4ade80';
   const txt=document.createElement('span');txt.className='s';
   const pre=d.max>1?('Slot '+(s.slot+1)+': '):'';
-  if(s.connected){
-    const model=s.model==='DSE'?'DualSense Edge':'DualSense';
-    txt.textContent=pre+model+(s.name?' “'+s.name+'”':'')+' connected';
-  }else{
-    txt.textContent=pre+(d.max>1?'empty':'No controller connected');
-  }
   row.append(dot,txt);
-  if(s.connected&&s.battery_valid){
+  if(!s.connected){
+    txt.textContent=pre+(d.max>1?'empty':'No controller connected');
+    return row;
+  }
+  const model=s.model==='DSE'?'DualSense Edge':'DualSense';
+  txt.textContent=pre+model+(s.name?' “'+s.name+'”':'');
+  if(s.battery_valid){
     const b=document.createElement('span');
     b.className='s'+((s.battery_pct<=20&&!s.charging)?' lowb':'');
     b.textContent='🔋'+s.battery_pct+'%'+(s.charging?' ⚡':'');
     row.append(b);
   }
-  if(s.connected&&d.max>1&&d.audio_allowed&&s.slot===d.audio_slot){
-    const a=document.createElement('span');a.className='aud';
-    a.textContent='♪ audio';
-    row.append(a);
+  // Feature availability at the current tier: rumble + adaptive triggers
+  // always work on every pad; speaker/HD haptics/mic stream only while a
+  // single pad is connected (Bluetooth bandwidth).
+  row.append(chip('💥 rumble'),chip('🎯 triggers'));
+  if(d.audio_allowed&&s.slot===d.audio_slot){
+    row.append(chip('🔊 audio','aud'),chip('📳 HD haptics','aud'),chip('🎤 mic','aud'));
   }
   return row;
 }
