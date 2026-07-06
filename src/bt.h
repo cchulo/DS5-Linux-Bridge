@@ -78,6 +78,17 @@ bool bt_feature_cached(uint8_t reportId, std::vector<uint8_t> &out);
 // yet.
 bool bt_feature_cached_any(uint8_t reportId, std::vector<uint8_t> &out);
 
+// Persisted feature snapshot (config flash): copies the stored blob for
+// reportId 0x05/0x20/0x09 into `out` (as-cached format, leading report id
+// included). False when no snapshot has been captured yet. Used to answer
+// bind-time probes at boot, before any controller has connected this session.
+bool bt_feature_snapshot_get(uint8_t reportId, std::vector<uint8_t> &out);
+
+// Flush a freshly captured feature snapshot to flash (deferred from the BT
+// control-channel hot path). Call every main-loop iteration; writes at most
+// once per capture (normally once in the dongle's lifetime).
+void bt_feature_snapshot_persist_if_dirty();
+
 // Tells every connected DualSense to power off (same as a long-press of the
 // PS button). No-op for empty slots. Used on host-suspend so controllers
 // don't sit awake until their idle timers fire.

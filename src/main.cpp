@@ -251,15 +251,18 @@ uint16_t tud_hid_get_report_cb(uint8_t itf, uint8_t report_id,
   BtStatus st;
   bt_get_status(slot, &st);
   if (!st.connected) {
-    // Empty slot: serve a plausible blob from any connected pad so
-    // hid-playstation's bind-time probes (calibration 0x05, firmware 0x20,
-    // pairing 0x09) don't stall the interface — a stalled probe would fail
-    // the driver bind and the slot would stay dead when a pad later takes
-    // it. Caveat (documented in docs/host-compat.md): a pad that connects
-    // into this slot AFTER enumeration inherits the placeholder IMU
-    // calibration until the next re-enumeration.
+    // Empty slot: serve a plausible blob so hid-playstation's bind-time
+    // probes (calibration 0x05, firmware 0x20, pairing 0x09) don't stall the
+    // interface — a stalled probe fails the driver bind and the slot stays
+    // dead until re-enumeration. Prefer a live pad's cache, else the
+    // persisted snapshot from the first pad ever paired. Caveat: a pad that
+    // connects AFTER enumeration inherits the placeholder IMU calibration
+    // until the next re-enumeration.
     std::vector<uint8_t> ph;
-    if (!bt_feature_cached_any(report_id, ph) || ph.size() <= 1) {
+    if (!bt_feature_cached_any(report_id, ph)) {
+      bt_feature_snapshot_get(report_id, ph);
+    }
+    if (ph.size() <= 1) {
       return 0;
     }
     size_t n = ph.size() - 1;
@@ -450,13 +453,12 @@ int main() {
   state_init();
 
 #ifdef ENABLE_WAKE_HID
-  // Enumerate immediately as the MINIMAL variant (kbd + inert pads + CDC-NCM),
-  // even before any controller connects. tusb_init() left us tud_disconnect()'d;
-  // without this the dongle would stay invisible to the host on a cold plug-in
-  // until the first controller connection flipped it to FULL -- which made the
-  // config web page (carried on NCM, present in MINIMAL too) unreachable from a
-  // cold start, and is also needed so the device is enumerated before the host
-  // suspends (remote-wakeup). active_variant/desired_variant are already MINIMAL.
+  // Enumerate immediately as the FULL variant: every gamepad interface (plus
+  // audio, NCM, wake keyboard) is present whenever the dongle is plugged in,
+  // so controllers join and leave with zero USB disruption. Bind-time feature
+  // probes for not-yet-connected pads are answered from the persisted
+  // snapshot (bt_feature_snapshot_get). Being enumerated before the host
+  // suspends is also what makes remote-wakeup possible.
   tud_connect();
 #endif
 
@@ -467,6 +469,7 @@ int main() {
     cyw43_arch_poll();
     bt_connection_watchdog_tick();
     bt_blacklist_persist_if_dirty();
+    bt_feature_snapshot_persist_if_dirty();
     bt_pump();
     tud_task();
     wake_task();

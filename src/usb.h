@@ -33,6 +33,10 @@ uint8_t usb_kbd_hid_instance(void);
 void usb_request_variant_full(void);
 void usb_request_variant_minimal(void);
 
+// One-shot bus bounce keeping the current variant (see usb_descriptors.cpp;
+// used once ever, after the first feature-snapshot capture).
+void usb_request_rebind(void);
+
 // Drive variant-swap state machine. Call from main loop alongside
 // wake_task() / btstack hci_run().
 void usb_variant_task(void);

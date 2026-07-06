@@ -44,6 +44,9 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
 
 static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size);
 
+struct bt_slot;
+static void bt_feature_snapshot_maybe_capture(bt_slot *s);
+
 static btstack_packet_callback_registration_t hci_event_callback_registration, l2cap_event_callback_registration;
 
 constexpr size_t BT_SEND_MAX_PACKET_SIZE = 400; // 0xA2 header + 398-byte audio report + slack
@@ -875,13 +878,13 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             }
             if (bt_connected_count() == 0) {
 #ifdef ENABLE_WAKE_HID
-                // With ENABLE_WAKE_HID we stay enumerated for remote-wakeup,
-                // but switch to the minimal descriptor variant so the host
-                // no longer sees audio/gamepad ghosts. The variant-swap
-                // orchestrator handles the actual tud_disconnect/swap/
-                // tud_connect bounce on the main loop (gated on host
-                // not-suspended).
-                usb_request_variant_minimal();
+                // Stay enumerated with the FULL descriptor: the dongle now
+                // presents all gamepad interfaces whenever it is plugged in
+                // (user preference: connects/disconnects must be seamless, no
+                // re-enumeration bounces). Remote wakeup keeps working -- it
+                // only needs the device enumerated and suspended. The MINIMAL
+                // ghost-hiding variant is retained in usb_descriptors.cpp for
+                // a possible future config toggle, but is never requested.
 #else
                 // Without ENABLE_WAKE_HID we hide the USB device whenever no
                 // controller is paired (upstream behavior).
@@ -1011,6 +1014,7 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
 #if ENABLE_VERBOSE
                 printf("[L2CAP] Stored Feature Report 0x%02X (slot %d), len=%u\n", report_id, slot, size - 1);
 #endif
+                bt_feature_snapshot_maybe_capture(s);
             }
             // The DSE profile module is bound to the USB-exposed slot; a DSE
             // seated elsewhere works as a gamepad but its profile snapshot
@@ -1188,6 +1192,65 @@ bool bt_feature_cached_any(uint8_t reportId, vector<uint8_t> &out) {
         return true;
     }
     return false;
+}
+
+bool bt_feature_snapshot_get(uint8_t reportId, vector<uint8_t> &out) {
+    const Config_body &c = get_config();
+    if (!c.feature_snapshot_valid) return false;
+    switch (reportId) {
+        case 0x05: out.assign(c.feature_cal, c.feature_cal + c.feature_cal_len); return true;
+        case 0x20: out.assign(c.feature_fw, c.feature_fw + c.feature_fw_len); return true;
+        case 0x09: out.assign(c.feature_pair, c.feature_pair + c.feature_pair_len); return true;
+        default: return false;
+    }
+}
+
+// Deferred snapshot persist: set when the first controller's bind-time
+// feature reports (0x05/0x20/0x09) have all been cached and no snapshot was
+// stored yet. The main loop flushes it (one flash write, once per lifetime).
+static bool feature_snapshot_save_pending = false;
+
+static void bt_feature_snapshot_maybe_capture(bt_slot *s) {
+    if (get_config().feature_snapshot_valid) return;
+    if (feature_snapshot_save_pending) return; // captured, not yet flushed
+    auto cal = s->feature_data.find(0x05);
+    auto fw  = s->feature_data.find(0x20);
+    auto pr  = s->feature_data.find(0x09);
+    if (cal == s->feature_data.end() || fw == s->feature_data.end() ||
+        pr == s->feature_data.end()) {
+        return;
+    }
+    Config_body c = get_config();
+    if (cal->second.size() < 2 || cal->second.size() > sizeof(c.feature_cal) ||
+        fw->second.size()  < 2 || fw->second.size()  > sizeof(c.feature_fw) ||
+        pr->second.size()  < 2 || pr->second.size()  > sizeof(c.feature_pair)) {
+        return;
+    }
+    c.feature_cal_len = (uint8_t) cal->second.size();
+    memcpy(c.feature_cal, cal->second.data(), cal->second.size());
+    c.feature_fw_len = (uint8_t) fw->second.size();
+    memcpy(c.feature_fw, fw->second.data(), fw->second.size());
+    c.feature_pair_len = (uint8_t) pr->second.size();
+    memcpy(c.feature_pair, pr->second.data(), pr->second.size());
+    c.feature_snapshot_valid = 1;
+    set_config(c);
+    feature_snapshot_save_pending = true;
+    printf("[BT] Feature snapshot captured from slot %d (cal %u, fw %u, pair %u bytes)\n",
+           slot_index(s), c.feature_cal_len, c.feature_fw_len, c.feature_pair_len);
+#ifdef ENABLE_WAKE_HID
+    // The interfaces enumerated before this data existed answered their
+    // bind-time probes with stalls; bounce the bus ONCE so the host rebinds
+    // them against real data. Only ever happens right after the first
+    // pairing on a fresh flash.
+    usb_request_rebind();
+#endif
+}
+
+void bt_feature_snapshot_persist_if_dirty() {
+    if (!feature_snapshot_save_pending) return;
+    feature_snapshot_save_pending = false;
+    const bool ok = config_save();
+    printf("[BT] Feature snapshot persist: %s\n", ok ? "OK" : "FAILED");
 }
 
 void bt_write(uint8_t slot, const uint8_t *data, const uint16_t len, bool kick) {

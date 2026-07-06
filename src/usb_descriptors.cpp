@@ -644,7 +644,12 @@ typedef enum {
     DESC_VARIANT_MINIMAL = 0, // kbd only
     DESC_VARIANT_FULL,        // audio + gamepad + kbd
 } desc_variant_t;
-static volatile desc_variant_t active_variant = DESC_VARIANT_MINIMAL;
+// The dongle now boots and stays in FULL: every gamepad interface is present
+// whenever it is plugged in, so controllers join and leave with zero USB
+// disruption (user preference over idle ghost-device hiding). MINIMAL and the
+// swap orchestrator are retained for a possible future config toggle; nothing
+// requests MINIMAL anymore.
+static volatile desc_variant_t active_variant = DESC_VARIANT_FULL;
 
 void usb_set_descriptor_variant_full(void)    { active_variant = DESC_VARIANT_FULL; }
 void usb_set_descriptor_variant_minimal(void) { active_variant = DESC_VARIANT_MINIMAL; }
@@ -679,8 +684,15 @@ uint8_t usb_kbd_hid_instance(void) { return 1; }
 #include "pico/time.h"
 #include "wake.h"
 
-static volatile desc_variant_t desired_variant = DESC_VARIANT_MINIMAL;
+static volatile desc_variant_t desired_variant = DESC_VARIANT_FULL;
 static volatile bool host_suspended_flag = false;
+
+// One-shot re-enumeration keeping the same variant. Used exactly once per
+// flash lifetime: the first controller ever paired supplies the bind-time
+// feature reports (calibration etc.) that the interfaces enumerated without;
+// a single bounce lets the host rebind them against real data.
+static volatile bool rebind_pending = false;
+void usb_request_rebind(void) { rebind_pending = true; }
 
 typedef enum {
     SWAP_IDLE,
@@ -731,7 +743,8 @@ void usb_variant_task(void) {
     const uint64_t now = time_us_64();
     switch (swap_state) {
         case SWAP_IDLE:
-            if (desired_variant != active_variant) {
+            if (desired_variant != active_variant || rebind_pending) {
+                rebind_pending = false;
                 wake_reset_for_variant_swap();
                 tud_disconnect();
                 swap_state = SWAP_DISCONNECTING;
