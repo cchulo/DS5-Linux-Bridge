@@ -240,7 +240,8 @@ The multi-controller fork adds — all **additive**, nothing existing changed:
   audio_allowed, slots:[{slot, connected, model, battery_valid, battery_pct,
   charging, addr, name}]}`. `/api/status` keeps its original single-controller
   shape (it reports slot 0) so existing plugin code keeps working.
-- `GET /api/config` gained `audio_slot` (0-based designated audio slot) and
-  `max_slots`; `POST /api/config` accepts `audio_slot=<n>`.
+- `GET /api/config` gained `max_slots`. In `/api/slots`, `audio_slot` is the
+  slot currently owning the audio path (audio streams only while exactly one
+  controller is connected; `audio_allowed` reflects that).
 - `POST /api/bonds action=pair` now answers **409** when every bond seat or
   controller slot is occupied — treat non-2xx as "no free slot", not an error.

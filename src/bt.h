@@ -32,6 +32,9 @@ void bt_get_signal_strength(uint8_t slot, int8_t *rssi);
 // Number of slots with a live ACL connection.
 int bt_connected_count();
 
+// Lowest slot index with a live ACL connection, or -1 if none.
+int bt_lowest_connected_slot();
+
 // Live controller status for the web UI / Decky plugin (GET /api/status).
 // All fields are cheap reads of data the firmware already tracks. battery_pct
 // and charging are only meaningful when connected (and after the first 0x31

@@ -134,10 +134,6 @@ void config_valid() {
     body->webconfig_subnet = 0;
     printf("[Config] webconfig_custom_ip invalid; using default preset\n");
   }
-  if (body->audio_slot >= MULTI_SLOT_COUNT) {
-    body->audio_slot = 0;
-    printf("[Config] audio_slot is invalid\n");
-  }
   // Legacy in-body version byte, kept in sync with the header for compatibility
   // with older firmware that read it. Not authoritative; the header version is.
   body->config_version = CONFIG_VERSION;

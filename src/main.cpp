@@ -14,6 +14,7 @@
 #include "utils.h"
 #include "wake.h"
 #include <cstdio>
+#include <malloc.h>
 
 #include "config.h"
 #include "dse.h"
@@ -69,13 +70,16 @@ void interrupt_loop() {
 
   const bool realtime = get_config().polling_rate_mode == 2;
   for (uint8_t slot = 0; slot < BT_MAX_SLOTS; slot++) {
-    if (!tud_hid_n_ready(slot))
+    const uint8_t inst = usb_slot_hid_instance(slot);
+    // Unexposed slots' interfaces aren't enumerated, so their instances are
+    // never mounted and tud_hid_n_ready stays false.
+    if (!tud_hid_n_ready(inst))
       continue;
 
     if (!realtime) {
       // Fixed-cadence mode: re-send the latest buffer every iteration; empty
       // slots keep reporting their neutral idle state.
-      if (!tud_hid_n_report(slot, 0x01, interrupt_in_data[slot], 63)) {
+      if (!tud_hid_n_report(inst, 0x01, interrupt_in_data[slot], 63)) {
         printf("[USBHID] tud_hid_report error (slot %u)\n", slot);
       }
       continue;
@@ -96,7 +100,7 @@ void interrupt_loop() {
 
     // Only send to TinyUSB if we actually grabbed fresh data
     if (should_send) {
-      if (!tud_hid_n_report(slot, 0x01, safe_report, 63)) {
+      if (!tud_hid_n_report(inst, 0x01, safe_report, 63)) {
         printf("[USBHID] tud_hid_report error (slot %u)\n", slot);
 
         // If the report failed to queue, restore the dirty flag
@@ -240,11 +244,11 @@ uint16_t tud_hid_get_report_cb(uint8_t itf, uint8_t report_id,
 #endif
   (void)report_type;
 
-  // In FULL, gamepad HID instance i == slot i.
-  const uint8_t slot = itf;
-  if (slot >= BT_MAX_SLOTS) {
+  const int mapped = usb_hid_instance_slot(itf);
+  if (mapped < 0 || mapped >= BT_MAX_SLOTS) {
     return 0;
   }
+  const uint8_t slot = (uint8_t) mapped;
 
   BtStatus st;
   bt_get_status(slot, &st);
@@ -323,11 +327,11 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id,
 #endif
   (void)report_type;
 
-  // In FULL, gamepad HID instance i == slot i.
-  const uint8_t slot = itf;
-  if (slot >= BT_MAX_SLOTS) {
+  const int mapped = usb_hid_instance_slot(itf);
+  if (mapped < 0 || mapped >= BT_MAX_SLOTS) {
     return;
   }
+  const uint8_t slot = (uint8_t) mapped;
 
   // INTERRUPT OUT
   if (report_id == 0) {
@@ -418,6 +422,16 @@ int main() {
     }
   } else {
     printf("Clean boot\n");
+  }
+
+  // Heap telemetry for bring-up: the audio path + web server + per-slot send
+  // FIFOs all draw from one heap, and exhaustion here surfaces as a watchdog
+  // reboot. Logged once at boot; compare across builds when chasing OOM.
+  {
+    extern char __StackLimit[], __bss_end__[];
+    printf("[MEM] heap region %d bytes (bss_end %p..stacklimit %p), malloc used %d\n",
+           (int) (__StackLimit - __bss_end__), (void *) __bss_end__,
+           (void *) __StackLimit, mallinfo().uordblks);
   }
 
   // Seed every slot's input buffer with the neutral idle report so the host

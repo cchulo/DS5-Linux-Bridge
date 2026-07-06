@@ -19,8 +19,10 @@
 #endif
 
 // Se estiver 1 ou 2, o 0x31 do DualSense causa estouro
-// (per connection: fewer than ~3-4 ACL buffers overflows on the DS 0x31 report)
-#define MAX_NR_HCI_ACL_PACKETS (4 * MULTI_SLOT_COUNT)
+// (fewer than ~3-4 buffers overflows on one DS 0x31 stream; extra links only
+// need a couple each -- each buffer costs ~1 KB of static RAM, and heap
+// headroom matters more here: see the web-page/audio pressure notes)
+#define MAX_NR_HCI_ACL_PACKETS (2 * MULTI_SLOT_COUNT + 2)
 
 #define MAX_NR_HCI_CONNECTIONS MULTI_SLOT_COUNT
 #define MAX_NR_L2CAP_CHANNELS  (2 * MULTI_SLOT_COUNT) // control + interrupt per slot

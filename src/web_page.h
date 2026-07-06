@@ -6,7 +6,19 @@
 // POST /api/config. Settings mirror Config_body (src/config.h); the firmware
 // re-validates every field, so the page is a convenience, not the source of
 // truth for bounds.
-static const char WEB_PAGE[] = R"rawhtml(<!doctype html>
+//
+// The COMPLETE HTTP response (headers + body) lives in flash so serving the
+// ~10 KB page never touches the heap -- make_file()'s malloc of the whole
+// response was the single biggest allocation in the firmware, on a heap the
+// audio path already pressures. No Content-Length: every response uses
+// Connection: close, so the peer reads to EOF.
+static const char WEB_PAGE_RESPONSE[] =
+    "HTTP/1.1 200 OK\r\n"
+    "Content-Type: text/html; charset=utf-8\r\n"
+    "Cache-Control: no-store\r\n"
+    "Connection: close\r\n"
+    "\r\n"
+    R"rawhtml(<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>DS5-Linux-Bridge</title>
 <style>
@@ -76,15 +88,6 @@ footer .kofi:hover{text-decoration:none;opacity:.9}
     <option value="2">Real-time (1000 Hz)</option>
   </select>
   <div class="hint">Takes effect after reconnecting the controller.</div>
-</div>
-
-<div class="field" id="audio_slot_wrap" style="display:none">
-  <label class="lbl">Audio &amp; haptics controller</label>
-  <select id="audio_slot"></select>
-  <div class="hint">Which controller slot gets speaker/headset audio, mic and HD
-  haptics. With 3 or more controllers connected, audio is off for everyone
-  (Bluetooth bandwidth) &mdash; rumble and adaptive triggers always work on every
-  controller.</div>
 </div>
 
 <div class="field">
@@ -181,17 +184,6 @@ async function load(){
     $('disable_inactive_disconnect').checked=!!c.disable_inactive_disconnect;
     $('disable_pico_led').checked=!!c.disable_pico_led;
     $('webconfig_subnet').value=c.webconfig_subnet;
-    if(c.max_slots>1){
-      const sel=$('audio_slot');sel.innerHTML='';
-      for(let i=0;i<c.max_slots;i++){
-        const o=document.createElement('option');o.value=i;
-        o.textContent='Slot '+(i+1)+' (player '+(i+1)+')';
-        sel.appendChild(o);
-      }
-      sel.value=c.audio_slot||0;
-      sel.onchange=markDirty;
-      $('audio_slot_wrap').style.display='';
-    }
     if(c.webconfig_custom_ip&&c.webconfig_custom_ip!=='0.0.0.0')
       $('webconfig_custom_ip').value=c.webconfig_custom_ip;
     toggleCustomIp();
@@ -210,7 +202,7 @@ async function save(){
     'disable_pico_led='+($('disable_pico_led').checked?1:0),
     'webconfig_subnet='+$('webconfig_subnet').value,
     'webconfig_custom_ip='+encodeURIComponent($('webconfig_custom_ip').value.trim())
-  ].concat($('audio_slot_wrap').style.display===''?['audio_slot='+$('audio_slot').value]:[]).join('&');
+  ].join('&');
   setStatus('saving…','dirty');
   try{
     const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});
@@ -316,9 +308,9 @@ function slotRow(d,s){
     b.textContent='🔋'+s.battery_pct+'%'+(s.charging?' ⚡':'');
     row.append(b);
   }
-  if(s.connected&&d.max>1&&s.slot===d.audio_slot){
+  if(s.connected&&d.max>1&&d.audio_allowed&&s.slot===d.audio_slot){
     const a=document.createElement('span');a.className='aud';
-    a.textContent=d.audio_allowed?'♪ audio':'♪ audio off (3+ pads)';
+    a.textContent='♪ audio';
     row.append(a);
   }
   return row;

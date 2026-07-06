@@ -24,6 +24,12 @@ bool usb_descriptor_variant_is_full(void);
 // function so callers stay decoupled from the constant.
 uint8_t usb_kbd_hid_instance(void);
 
+// How many gamepad slots the FULL variant exposes right now, and the grow-only
+// request to expose more (bounces the bus once via the variant orchestrator;
+// see usb_descriptors.cpp). Reset to 1 by usb_request_variant_minimal().
+void usb_request_slots_exposed(uint8_t count);
+uint8_t usb_exposed_slots(void);
+
 // Request a variant swap: orchestrator notes the desired variant, then
 // usb_variant_task() drives a tud_disconnect()/settle/swap/tud_connect()
 // bounce on the main loop. Safe to call from any context. No-op if the
@@ -48,6 +54,28 @@ bool usb_variant_swap_in_progress(void);
 // state; usb_variant_task queries this before starting/continuing a
 // swap so we don't yank the bus during S3/S5.
 void usb_set_host_suspended(bool suspended);
+#endif
+
+#include <stdint.h>
+#include "slots.h"
+
+// Slot <-> TinyUSB HID instance mapping. FULL parse order with the wake
+// keyboard: slot 0 gamepad = instance 0, keyboard = instance 1, then the
+// extra gamepad interfaces (slots 1..N-1) = instances 2..N. Without the wake
+// keyboard the gamepads are simply instances 0..N-1.
+#ifdef ENABLE_WAKE_HID
+static inline uint8_t usb_slot_hid_instance(uint8_t slot) {
+    return slot == 0 ? 0 : (uint8_t) (slot + 1);
+}
+// Returns -1 for the keyboard instance.
+static inline int usb_hid_instance_slot(uint8_t instance) {
+    if (instance == 0) return 0;
+    if (instance == 1) return -1;
+    return (int) instance - 1;
+}
+#else
+static inline uint8_t usb_slot_hid_instance(uint8_t slot) { return slot; }
+static inline int usb_hid_instance_slot(uint8_t instance) { return (int) instance; }
 #endif
 
 #endif //DS5_BRIDGE_USB_H

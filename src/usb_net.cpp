@@ -232,7 +232,6 @@ static int json_config(char *out, size_t cap) {
                     "\"controller_mode\":%u,"
                     "\"webconfig_subnet\":%u,"
                     "\"webconfig_custom_ip\":\"%u.%u.%u.%u\","
-                    "\"audio_slot\":%u,"
                     "\"max_slots\":%u}",
                     PICO_PROGRAM_VERSION_STRING,
                     c.inactive_time,
@@ -244,7 +243,6 @@ static int json_config(char *out, size_t cap) {
                     c.webconfig_subnet,
                     c.webconfig_custom_ip[0], c.webconfig_custom_ip[1],
                     c.webconfig_custom_ip[2], c.webconfig_custom_ip[3],
-                    c.audio_slot,
                     BT_MAX_SLOTS);
 }
 
@@ -391,8 +389,13 @@ static int json_slots(char *out, size_t cap) {
 
 extern "C" int fs_open_custom(struct fs_file *file, const char *name) {
     if (strcmp(name, "/") == 0 || strcmp(name, "/index.html") == 0) {
-        return make_file(file, "200 OK", "text/html; charset=utf-8",
-                         WEB_PAGE, sizeof(WEB_PAGE) - 1);
+        // Serve the page straight from flash (headers included) -- zero heap.
+        memset(file, 0, sizeof(*file));
+        file->data = WEB_PAGE_RESPONSE;
+        file->len = (int) (sizeof(WEB_PAGE_RESPONSE) - 1);
+        file->index = file->len;
+        file->flags = FS_FILE_FLAGS_HEADER_INCLUDED;
+        return 1;
     }
     // Shared JSON scratch: make_file() copies the body into its own malloc'd
     // buffer before returning, and httpd serves one custom file at a time, so a
@@ -436,10 +439,12 @@ extern "C" int fs_open_custom(struct fs_file *file, const char *name) {
 }
 
 extern "C" void fs_close_custom(struct fs_file *file) {
-    if (file && file->data) {
+    // Everything except the flash-resident page response is malloc'd by
+    // make_file().
+    if (file && file->data && file->data != WEB_PAGE_RESPONSE) {
         free(const_cast<char *>(file->data));
-        file->data = NULL;
     }
+    if (file) file->data = NULL;
 }
 
 extern "C" int fs_read_custom(struct fs_file *file, char *buffer, int count) {
@@ -521,8 +526,6 @@ static void apply_post(char *body) {
             c.audio_buffer_length = (uint8_t) clampi(val, 16, 128);
         } else if (strcmp(tok, "controller_mode") == 0) {
             c.controller_mode = (uint8_t) clampi(val, 0, 2);
-        } else if (strcmp(tok, "audio_slot") == 0) {
-            c.audio_slot = (uint8_t) clampi(val, 0, BT_MAX_SLOTS - 1);
         } else if (strcmp(tok, "webconfig_subnet") == 0) {
             c.webconfig_subnet = (uint8_t) clampi(val, 0, WEBCONFIG_SUBNET_MAX);
         } else if (strcmp(tok, "webconfig_custom_ip") == 0) {

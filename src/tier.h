@@ -7,8 +7,7 @@
 // 78-byte output report and cost no meaningful airtime.
 //
 //   1 pad        : full audio (speaker + headset + mic) + HD haptics
-//   2 pads       : audio only on the designated audio slot
-//   3-4 pads     : audio off entirely (classic rumble fallback)
+//   2+ pads      : audio off entirely (classic rumble fallback)
 //
 
 #ifndef DS5_BRIDGE_TIER_H
@@ -19,11 +18,13 @@
 #include "slots.h"
 
 // The slot whose controller owns the audio path (speaker/haptics frames, mic,
-// mute, headset jack). Configurable via the web UI (config audio_slot),
-// clamped to a valid slot. Single-slot builds always return 0.
+// mute, headset jack): the lowest connected slot. Audio is only ALLOWED when
+// exactly one pad is connected, so this is normally just "the" pad; with 2+
+// connected the value still exists (mute state bookkeeping) but streaming is
+// gated off. Slot 0 when nothing is connected.
 uint8_t tier_audio_slot();
 
-// May the audio path stream to the controller right now? False at 3+
+// May the audio path stream to the controller right now? False at 2+
 // connected pads; audio_loop then drains the UAC FIFO without emitting BT
 // audio frames, which also makes the controller fall back to classic rumble.
 bool tier_audio_allowed();

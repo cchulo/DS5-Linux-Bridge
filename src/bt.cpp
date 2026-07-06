@@ -134,6 +134,13 @@ int bt_connected_count() {
     return BT_MAX_SLOTS - bt_free_slot_count();
 }
 
+int bt_lowest_connected_slot() {
+    for (auto &s : slots) {
+        if (s.acl_handle != HCI_CON_HANDLE_INVALID) return slot_index(&s);
+    }
+    return -1;
+}
+
 // Session-order assignment: lowest free slot. (A bond-sticky policy would
 // hook in here.) Returns nullptr when full.
 static bt_slot *slot_alloc(const bd_addr_t addr) {
@@ -975,6 +982,7 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                     // until the wake lands.
                     wake_on_bt_connect();
 #ifdef ENABLE_WAKE_HID
+                    usb_request_slots_exposed((uint8_t) (slot + 1));
                     usb_request_variant_full();
 #else
                     tud_connect();
@@ -992,6 +1000,7 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                     // until the wake lands.
                     wake_on_bt_connect();
 #ifdef ENABLE_WAKE_HID
+                    usb_request_slots_exposed((uint8_t) (slot + 1));
                     usb_request_variant_full();
 #else
                     tud_connect();
