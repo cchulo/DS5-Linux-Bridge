@@ -982,7 +982,6 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                     // until the wake lands.
                     wake_on_bt_connect();
 #ifdef ENABLE_WAKE_HID
-                    usb_request_slots_exposed((uint8_t) (slot + 1));
                     usb_request_variant_full();
 #else
                     tud_connect();
@@ -1000,7 +999,6 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                     // until the wake lands.
                     wake_on_bt_connect();
 #ifdef ENABLE_WAKE_HID
-                    usb_request_slots_exposed((uint8_t) (slot + 1));
                     usb_request_variant_full();
 #else
                     tud_connect();

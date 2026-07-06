@@ -71,8 +71,6 @@ void interrupt_loop() {
   const bool realtime = get_config().polling_rate_mode == 2;
   for (uint8_t slot = 0; slot < BT_MAX_SLOTS; slot++) {
     const uint8_t inst = usb_slot_hid_instance(slot);
-    // Unexposed slots' interfaces aren't enumerated, so their instances are
-    // never mounted and tud_hid_n_ready stays false.
     if (!tud_hid_n_ready(inst))
       continue;
 

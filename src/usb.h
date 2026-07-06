@@ -24,12 +24,6 @@ bool usb_descriptor_variant_is_full(void);
 // function so callers stay decoupled from the constant.
 uint8_t usb_kbd_hid_instance(void);
 
-// How many gamepad slots the FULL variant exposes right now, and the grow-only
-// request to expose more (bounces the bus once via the variant orchestrator;
-// see usb_descriptors.cpp). Reset to 1 by usb_request_variant_minimal().
-void usb_request_slots_exposed(uint8_t count);
-uint8_t usb_exposed_slots(void);
-
 // Request a variant swap: orchestrator notes the desired variant, then
 // usb_variant_task() drives a tud_disconnect()/settle/swap/tud_connect()
 // bounce on the main loop. Safe to call from any context. No-op if the

@@ -55,12 +55,16 @@ enum {
 #endif
     ITF_NUM_BASE_TOTAL,
     // Gamepad interfaces for slots 1..MULTI_SLOT_COUNT-1 are appended AFTER
-    // the base set, so every base interface keeps its upstream number at any
-    // exposure count: NCM keeps its network-adapter identity, the wake
-    // keyboard stays put, and slot 0 remains the real-DualSense interface 3.
-    // Slot k (k >= 1) is interface ITF_NUM_BASE_TOTAL + k - 1. Only the
-    // slots exposed by the variant orchestrator are enumerated -- the config
-    // descriptor is truncated at fetch time (the extras are the array tail).
+    // the base set, so every base interface keeps its upstream number: NCM
+    // keeps its network-adapter identity, the wake keyboard stays put, and
+    // slot 0 remains the real-DualSense interface 3. Slot k (k >= 1) is
+    // interface ITF_NUM_BASE_TOTAL + k - 1. FULL always exposes every slot
+    // (empty ones report neutral input): USB cannot add interfaces without a
+    // re-enumeration bounce, so joining/leaving controllers stay seamless and
+    // the bus only bounces at first-connect / last-disconnect, exactly like
+    // the upstream MINIMAL<->FULL swap. (The tail-append layout would also
+    // support truncating to an exposed-slot count, if a hide-empty-slots
+    // policy is ever wanted again.)
     ITF_NUM_TOTAL = ITF_NUM_BASE_TOTAL + (MULTI_SLOT_COUNT - 1),
 
     // The audio function uses an IAD; the device-class triple must be the
@@ -93,7 +97,7 @@ enum {
         0,
 #endif
     // Full length with every slot's gamepad block; trailing blocks (slots
-    // 1..N-1) sit after the base set and are truncated per exposure count.
+    // 1..N-1) sit after the base set.
     CONFIG_DESC_LEN_TOTAL = CONFIG_DESC_LEN_BASE + CONFIG_DESC_LEN_WAKE_KBD
         + CONFIG_DESC_LEN_NET
         + (MULTI_SLOT_COUNT - 1) * CONFIG_DESC_LEN_GAMEPAD
@@ -678,15 +682,6 @@ uint8_t usb_kbd_hid_instance(void) { return 1; }
 static volatile desc_variant_t desired_variant = DESC_VARIANT_MINIMAL;
 static volatile bool host_suspended_flag = false;
 
-// How many gamepad slots the FULL variant exposes. Grow-only within a session:
-// a controller joining a not-yet-exposed slot bounces the bus once to add its
-// interface (it gets its own calibration at bind time); a controller LEAVING
-// does not re-enumerate (its interface just reports neutral input) so a
-// mid-game drop never disturbs the remaining players. Reset to 1 when the
-// last controller disconnects (the MINIMAL request).
-static volatile uint8_t desired_slots = 1;
-static volatile uint8_t active_slots  = 1;
-
 typedef enum {
     SWAP_IDLE,
     SWAP_DISCONNECTING,
@@ -699,15 +694,7 @@ static constexpr uint64_t SWAP_DISCONNECT_SETTLE_US = 500000;  // 500 ms
 static constexpr uint64_t SWAP_CONNECT_SETTLE_US    = 1500000; // 1500 ms
 
 void usb_request_variant_full(void)    { desired_variant = DESC_VARIANT_FULL; }
-void usb_request_variant_minimal(void) {
-    desired_variant = DESC_VARIANT_MINIMAL;
-    desired_slots = 1; // next session starts back at one exposed gamepad
-}
-void usb_request_slots_exposed(uint8_t count) {
-    if (count > MULTI_SLOT_COUNT) count = MULTI_SLOT_COUNT;
-    if (count > desired_slots) desired_slots = count; // grow-only
-}
-uint8_t usb_exposed_slots(void) { return active_slots; }
+void usb_request_variant_minimal(void) { desired_variant = DESC_VARIANT_MINIMAL; }
 void usb_set_host_suspended(bool s)    { host_suspended_flag = s; }
 bool usb_variant_swap_in_progress(void) { return swap_state != SWAP_IDLE; }
 
@@ -744,8 +731,7 @@ void usb_variant_task(void) {
     const uint64_t now = time_us_64();
     switch (swap_state) {
         case SWAP_IDLE:
-            if (desired_variant != active_variant ||
-                (desired_variant == DESC_VARIANT_FULL && desired_slots != active_slots)) {
+            if (desired_variant != active_variant) {
                 wake_reset_for_variant_swap();
                 tud_disconnect();
                 swap_state = SWAP_DISCONNECTING;
@@ -755,7 +741,6 @@ void usb_variant_task(void) {
         case SWAP_DISCONNECTING:
             if (now - swap_state_entered < SWAP_DISCONNECT_SETTLE_US) return;
             active_variant = desired_variant;
-            active_slots = desired_slots;
             tud_connect();
             swap_state = SWAP_CONNECTING;
             swap_state_entered = now;
@@ -790,23 +775,7 @@ uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {
             bInterval = 0x01;
             break;
     }
-    // Expose only the first `k` slots' gamepad interfaces: the extra blocks
-    // are the array TAIL, so truncating wTotalLength/bNumInterfaces is all it
-    // takes (TinyUSB and the host only parse wTotalLength bytes).
-#ifdef ENABLE_WAKE_HID
-    uint8_t k = active_slots;
-#else
-    uint8_t k = MULTI_SLOT_COUNT; // no variant orchestrator without wake HID
-#endif
-    if (k < 1) k = 1;
-    if (k > MULTI_SLOT_COUNT) k = MULTI_SLOT_COUNT;
-    const uint16_t total_len = (uint16_t) (CONFIG_DESC_LEN_TOTAL
-        - (MULTI_SLOT_COUNT - k) * CONFIG_DESC_LEN_GAMEPAD);
-    descriptor_configuration[2] = (uint8_t) (total_len & 0xFF);
-    descriptor_configuration[3] = (uint8_t) (total_len >> 8);
-    descriptor_configuration[4] = (uint8_t) (ITF_NUM_BASE_TOTAL + (k - 1)); // bNumInterfaces
-
-    // Patch every gamepad block (patching unexposed tail blocks is harmless).
+    // Patch every gamepad block.
     // Slot 0's block ends at CONFIG_DESC_LEN_BASE; slot j>=1's block ends
     // after the base set + j blocks. Within a block (relative to its end):
     // -1 = EP OUT bInterval, -8 = EP IN bInterval, -16 = wDescriptorLength
