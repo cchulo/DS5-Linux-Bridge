@@ -865,6 +865,11 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             if (s) {
                 printf("[HCI] Slot %d disconnected\n", slot_index(s));
                 slot_clear(s);
+                // Neutralize the slot's USB input buffer: with always-FULL
+                // enumeration the interface stays visible, and a pad that
+                // dropped mid-press (e.g. the PS+Triangle power-off shortcut)
+                // must not leave its last buttons frozen "held" on the host.
+                bridge_reset_slot_input((uint8_t) slot_index(s));
                 if (slot_index(s) == tier_audio_slot()) {
                     state_reset_mute();
                 }
@@ -1390,7 +1395,7 @@ void init_feature(uint8_t slot) {
     get_feature_data(slot, 0x70, 64);
 }
 
-void bt_dualsense_power_off() {
+void bt_slot_power_off(uint8_t slot) {
     // DualSense feature report 0x08 ("Set USB Settings 1") accepts a
     // sub-command at byte 0; sub-command 0x02 is power-off, equivalent to
     // a long PS-button hold. Remaining bytes are settings fields we leave
@@ -1401,10 +1406,15 @@ void bt_dualsense_power_off() {
     constexpr uint8_t SUBCMD_POWER_OFF             = 0x02;
     constexpr size_t  REPORT_08_PAYLOAD_LEN        = 47;
 
+    if (slot >= BT_MAX_SLOTS) return;
+    if (slots[slot].control_cid == 0) return; // empty slot, nothing to do
+    uint8_t payload[REPORT_08_PAYLOAD_LEN] = {0};
+    payload[0] = SUBCMD_POWER_OFF;
+    set_feature_data(slot, REPORT_ID_SET_USB_SETTINGS_1, payload, sizeof(payload));
+}
+
+void bt_dualsense_power_off() {
     for (uint8_t slot = 0; slot < BT_MAX_SLOTS; slot++) {
-        if (slots[slot].control_cid == 0) continue; // empty slot, nothing to do
-        uint8_t payload[REPORT_08_PAYLOAD_LEN] = {0};
-        payload[0] = SUBCMD_POWER_OFF;
-        set_feature_data(slot, REPORT_ID_SET_USB_SETTINGS_1, payload, sizeof(payload));
+        bt_slot_power_off(slot);
     }
 }

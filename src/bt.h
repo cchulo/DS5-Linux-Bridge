@@ -94,6 +94,10 @@ void bt_feature_snapshot_persist_if_dirty();
 // don't sit awake until their idle timers fire.
 void bt_dualsense_power_off();
 
+// Power off a single slot's controller (bond kept; it reconnects on the next
+// PS press). Used by the PS+Triangle controller shortcut.
+void bt_slot_power_off(uint8_t slot);
+
 // Tick connection watchdogs (pre-ACL attempt + per-slot setup). Call from main loop.
 void bt_connection_watchdog_tick();
 

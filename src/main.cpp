@@ -111,6 +111,15 @@ void interrupt_loop() {
   }
 }
 
+void bridge_reset_slot_input(uint8_t slot) {
+  if (slot >= BT_MAX_SLOTS) return;
+  critical_section_enter_blocking(&report_cs);
+  memcpy(interrupt_in_data[slot], idle_input_report,
+         sizeof(idle_input_report));
+  report_dirty[slot] = true;
+  critical_section_exit(&report_cs);
+}
+
 // Push one slot's cached output state to its controller as a BT 0x31 report.
 static void state_push_slot_to_bt(uint8_t slot) {
   uint8_t outputData[78]{};
@@ -157,6 +166,31 @@ void on_bt_data(uint8_t slot, CHANNEL_TYPE channel, uint8_t *data,
         state_push_to_bt();
       }
       prev_mute_pressed = mute_pressed;
+    }
+
+    // Controller shortcut: hold PS + Triangle for ~1 s to power that pad off
+    // (same as the controller's own long PS hold: bond kept, it reconnects on
+    // the next PS press; the host side is untouched — the pad's slot just
+    // goes neutral). Raw BT report offsets: input byte 7 bit 7 = Triangle
+    // (data[10]), input byte 9 bit 0 = PS (data[12]).
+    {
+      static uint64_t combo_since_us[BT_MAX_SLOTS] = {};
+      static bool combo_fired[BT_MAX_SLOTS] = {};
+      const bool combo = (data[12] & 0x01) && (data[10] & 0x80);
+      if (!combo) {
+        combo_since_us[slot] = 0;
+        combo_fired[slot] = false;
+      } else if (!combo_fired[slot]) {
+        const uint64_t now = time_us_64();
+        if (combo_since_us[slot] == 0) {
+          combo_since_us[slot] = now;
+        } else if (now - combo_since_us[slot] >= 1'000'000) {
+          combo_fired[slot] = true;
+          printf("[Main] PS+Triangle held on slot %u -> controller power off\n",
+                 slot);
+          bt_slot_power_off(slot);
+        }
+      }
     }
 
     // Track actual DS5 jack state separately — interrupt_in_data[..][53]
