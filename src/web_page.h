@@ -56,14 +56,7 @@ footer .kofi:hover{text-decoration:none;opacity:.9}
 <h1>DS5-Linux-Bridge <small id="ver"></small></h1>
 <p>Adapter configuration. Changes are saved to the adapter's flash.</p>
 
-<div id="statuscard">
-  <span class="dot"></span>
-  <span class="s" id="st_conn">Checking…</span>
-  <span class="s batt" id="st_batt" style="display:none">
-    <span class="bar"><span class="fill" id="st_fill"></span></span>
-    <span id="st_pct"></span>
-  </span>
-</div>
+<div id="statuscard"><div class="slotrow"><span class="dot"></span><span class="s">Checking…</span></div></div>
 
 <div class="field">
   <label class="lbl">Controller mode</label>
@@ -83,6 +76,15 @@ footer .kofi:hover{text-decoration:none;opacity:.9}
     <option value="2">Real-time (1000 Hz)</option>
   </select>
   <div class="hint">Takes effect after reconnecting the controller.</div>
+</div>
+
+<div class="field" id="audio_slot_wrap" style="display:none">
+  <label class="lbl">Audio &amp; haptics controller</label>
+  <select id="audio_slot"></select>
+  <div class="hint">Which controller slot gets speaker/headset audio, mic and HD
+  haptics. With 3 or more controllers connected, audio is off for everyone
+  (Bluetooth bandwidth) &mdash; rumble and adaptive triggers always work on every
+  controller.</div>
 </div>
 
 <div class="field">
@@ -179,6 +181,17 @@ async function load(){
     $('disable_inactive_disconnect').checked=!!c.disable_inactive_disconnect;
     $('disable_pico_led').checked=!!c.disable_pico_led;
     $('webconfig_subnet').value=c.webconfig_subnet;
+    if(c.max_slots>1){
+      const sel=$('audio_slot');sel.innerHTML='';
+      for(let i=0;i<c.max_slots;i++){
+        const o=document.createElement('option');o.value=i;
+        o.textContent='Slot '+(i+1)+' (player '+(i+1)+')';
+        sel.appendChild(o);
+      }
+      sel.value=c.audio_slot||0;
+      sel.onchange=markDirty;
+      $('audio_slot_wrap').style.display='';
+    }
     if(c.webconfig_custom_ip&&c.webconfig_custom_ip!=='0.0.0.0')
       $('webconfig_custom_ip').value=c.webconfig_custom_ip;
     toggleCustomIp();
@@ -197,7 +210,7 @@ async function save(){
     'disable_pico_led='+($('disable_pico_led').checked?1:0),
     'webconfig_subnet='+$('webconfig_subnet').value,
     'webconfig_custom_ip='+encodeURIComponent($('webconfig_custom_ip').value.trim())
-  ].join('&');
+  ].concat($('audio_slot_wrap').style.display===''?['audio_slot='+$('audio_slot').value]:[]).join('&');
   setStatus('saving…','dirty');
   try{
     const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});
@@ -256,6 +269,7 @@ async function postBonds(body,msg){
   try{
     const r=await fetch('/api/bonds',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});
     if(r.ok){bstatus('Done ✓','ok');loadBonds()}
+    else if(r.status===409)bstatus('no free slot — forget a controller first','err');
     else bstatus('failed','err');
   }catch(e){bstatus('failed','err')}
 }
@@ -267,7 +281,11 @@ function forgetBond(addr,label){
   postBonds('action=forget&addr='+addr,'forgetting…');
 }
 $('pair').onclick=()=>{
-  if(!confirm('Pair a new controller?\nThe controller you are using now will disconnect (it stays remembered and reconnects later). Then put the new controller in pairing mode (hold Share + PS until the light bar flashes).'))return;
+  const haveFree=lastSlots&&(lastSlots.connected<lastSlots.max);
+  const msg=haveFree
+    ?'Pair a new controller?\nPut it in pairing mode (hold Share + PS until the light bar flashes).'
+    :'Pair a new controller?\nThe controller you are using now will disconnect (it stays remembered and reconnects later). Then put the new controller in pairing mode (hold Share + PS until the light bar flashes).';
+  if(!confirm(msg))return;
   postBonds('action=pair','opening pairing…');
 };
 $('forgetall').onclick=()=>{
@@ -275,25 +293,49 @@ $('forgetall').onclick=()=>{
   postBonds('action=forgetall','forgetting all…');
 };
 
-// ----- Live status (GET /api/status) -----
+// ----- Live status (GET /api/slots) -----
+const SLOT_COLORS=['#3b82f6','#ef4444','#22c55e','#ec4899'];
+let lastSlots=null;
+function slotRow(d,s){
+  const row=document.createElement('div');
+  row.className='slotrow'+(s.connected?'':' off');
+  const dot=document.createElement('span');dot.className='dot';
+  if(s.connected)dot.style.background=d.max>1?SLOT_COLORS[s.slot%4]:'#4ade80';
+  const txt=document.createElement('span');txt.className='s';
+  const pre=d.max>1?('Slot '+(s.slot+1)+': '):'';
+  if(s.connected){
+    const model=s.model==='DSE'?'DualSense Edge':'DualSense';
+    txt.textContent=pre+model+(s.name?' “'+s.name+'”':'')+' connected';
+  }else{
+    txt.textContent=pre+(d.max>1?'empty':'No controller connected');
+  }
+  row.append(dot,txt);
+  if(s.connected&&s.battery_valid){
+    const b=document.createElement('span');
+    b.className='s'+((s.battery_pct<=20&&!s.charging)?' lowb':'');
+    b.textContent='🔋'+s.battery_pct+'%'+(s.charging?' ⚡':'');
+    row.append(b);
+  }
+  if(s.connected&&d.max>1&&s.slot===d.audio_slot){
+    const a=document.createElement('span');a.className='aud';
+    a.textContent=d.audio_allowed?'♪ audio':'♪ audio off (3+ pads)';
+    row.append(a);
+  }
+  return row;
+}
 async function loadStatus(){
   try{
-    const s=await (await fetch('/api/status')).json();
-    const card=$('statuscard');
-    card.className=s.connected?'on':'';
-    if(s.connected){
-      $('st_conn').innerHTML='<b>'+(s.model==='DSE'?'DualSense Edge':'DualSense')+'</b> connected';
-      if(s.battery_valid){
-        $('st_batt').style.display='';
-        $('st_pct').textContent=s.battery_pct+'%'+(s.charging?' ⚡':'');
-        const f=$('st_fill');f.style.width=s.battery_pct+'%';
-        $('st_batt').className='s batt'+((s.battery_pct<=20&&!s.charging)?' low':'');
-      }else{$('st_batt').style.display='none'}
-    }else{
-      $('st_conn').textContent='No controller connected';
-      $('st_batt').style.display='none';
-    }
-  }catch(e){$('st_conn').textContent='status unavailable'}
+    const d=await (await fetch('/api/slots')).json();
+    lastSlots=d;
+    const card=$('statuscard');card.innerHTML='';
+    card.className=d.connected>0?'on':'';
+    (d.slots||[]).forEach(s=>card.appendChild(slotRow(d,s)));
+  }catch(e){
+    const card=$('statuscard');card.innerHTML='';
+    const row=document.createElement('div');row.className='slotrow off';
+    const t=document.createElement('span');t.className='s';t.textContent='status unavailable';
+    row.append(t);card.appendChild(row);
+  }
 }
 
 load();

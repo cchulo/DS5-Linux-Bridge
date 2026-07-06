@@ -16,6 +16,7 @@
 #include "pico/util/queue.h"
 #include "config.h"
 #include "state_mgr.h"
+#include "tier.h"
 #include "usb.h"
 
 #define INPUT_CHANNELS    4
@@ -86,6 +87,15 @@ void audio_loop() {
 
     int16_t raw[192];
     uint32_t bytes_read = tud_audio_read(raw, sizeof(raw)); // 每次读入 384 bytes
+
+    // Bandwidth tier: at 3+ connected pads the BT link can't carry audio.
+    // Keep draining the UAC FIFO so the host still sees a working audio
+    // device, but emit no BT audio frames (the controller falls back to
+    // classic rumble; rumble-bearing output reports take the immediate
+    // state_push path in tud_hid_set_report_cb).
+    if (!tier_audio_allowed()) {
+        return;
+    }
     int frames = bytes_read / (INPUT_CHANNELS * sizeof(int16_t));
     if (frames == 0) {
         return;
@@ -203,9 +213,8 @@ void audio_loop() {
         pkt[1] = reportSeqCounter << 4;
         reportSeqCounter = (reportSeqCounter + 1) & 0x0F;
         pkt[10] = packetCounter++;
-        // Audio serves the USB-exposed slot only (the tier manager's
-        // designated audio slot once slots fan out).
-        state_get(BT_USB_SLOT, pkt + 13, 63);
+        // Audio frames carry the designated audio slot's output state.
+        state_get(tier_audio_slot(), pkt + 13, 63);
         memcpy(pkt + 78, haptic_buf, SAMPLE_SIZE);
 #if !DISABLE_SPEAKER_PROC
         critical_section_enter_blocking(&opus_cs);
@@ -213,7 +222,7 @@ void audio_loop() {
         critical_section_exit(&opus_cs);
 #endif
 
-        bt_write(BT_USB_SLOT, pkt, sizeof(pkt), /*kick=*/false);
+        bt_write(tier_audio_slot(), pkt, sizeof(pkt), /*kick=*/false);
     }
 }
 

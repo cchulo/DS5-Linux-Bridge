@@ -73,6 +73,7 @@ static_assert(offsetof(Config_body, controller_mode) == 10);
 static_assert(offsetof(Config_body, webconfig_subnet) == 11);
 static_assert(offsetof(Config_body, webconfig_custom_ip) == 12);
 static_assert(offsetof(Config_body, bond_names) == 16);
+static_assert(offsetof(Config_body, audio_slot) == 104);
 
 // CRC over the first `len` bytes of the body. `len` is the stored size, so an
 // older/shorter blob still validates against the bytes it actually wrote.
@@ -132,6 +133,10 @@ void config_valid() {
       !webconfig_ip_is_valid(body->webconfig_custom_ip)) {
     body->webconfig_subnet = 0;
     printf("[Config] webconfig_custom_ip invalid; using default preset\n");
+  }
+  if (body->audio_slot >= MULTI_SLOT_COUNT) {
+    body->audio_slot = 0;
+    printf("[Config] audio_slot is invalid\n");
   }
   // Legacy in-body version byte, kept in sync with the header for compatibility
   // with older firmware that read it. Not authoritative; the header version is.

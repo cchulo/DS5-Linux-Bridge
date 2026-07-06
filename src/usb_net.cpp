@@ -37,6 +37,7 @@
 #include "pico/unique_id.h"
 
 #include "bt.h"
+#include "tier.h"
 #include "config.h"
 #include "web_page.h"
 
@@ -230,7 +231,9 @@ static int json_config(char *out, size_t cap) {
                     "\"audio_buffer_length\":%u,"
                     "\"controller_mode\":%u,"
                     "\"webconfig_subnet\":%u,"
-                    "\"webconfig_custom_ip\":\"%u.%u.%u.%u\"}",
+                    "\"webconfig_custom_ip\":\"%u.%u.%u.%u\","
+                    "\"audio_slot\":%u,"
+                    "\"max_slots\":%u}",
                     PICO_PROGRAM_VERSION_STRING,
                     c.inactive_time,
                     c.disable_inactive_disconnect,
@@ -240,7 +243,9 @@ static int json_config(char *out, size_t cap) {
                     c.controller_mode,
                     c.webconfig_subnet,
                     c.webconfig_custom_ip[0], c.webconfig_custom_ip[1],
-                    c.webconfig_custom_ip[2], c.webconfig_custom_ip[3]);
+                    c.webconfig_custom_ip[2], c.webconfig_custom_ip[3],
+                    c.audio_slot,
+                    BT_MAX_SLOTS);
 }
 
 //--------------------------------------------------------------------+
@@ -351,6 +356,39 @@ static int json_status(char *out, size_t cap) {
                     s.charging ? "true" : "false");
 }
 
+// GET /api/slots -- per-slot status for multi-controller operation, plus the
+// tier state (see tier.h). Additive endpoint: /api/status keeps its original
+// single-controller shape for existing clients (Decky plugin).
+static int json_slots(char *out, size_t cap) {
+    int w = snprintf(out, cap,
+                     "{\"max\":%u,\"connected\":%d,\"audio_slot\":%u,\"audio_allowed\":%s,\"slots\":[",
+                     BT_MAX_SLOTS, bt_connected_count(), tier_audio_slot(),
+                     tier_audio_allowed() ? "true" : "false");
+    for (int i = 0; i < BT_MAX_SLOTS && w < (int) cap; i++) {
+        BtStatus s;
+        bt_get_status((uint8_t) i, &s);
+        char hex[13] = "";
+        if (s.connected) addr_to_hex(s.addr, hex);
+        const char *nm = s.connected ? config_bond_name(s.addr) : nullptr;
+        w += snprintf(out + w, cap - w,
+                      "%s{\"slot\":%d,\"connected\":%s,\"model\":\"%s\","
+                      "\"battery_valid\":%s,\"battery_pct\":%u,\"charging\":%s,"
+                      "\"addr\":\"%s\",\"name\":",
+                      i ? "," : "",
+                      i,
+                      s.connected ? "true" : "false",
+                      s.is_dse ? "DSE" : "DS5",
+                      s.battery_valid ? "true" : "false",
+                      s.battery_pct,
+                      s.charging ? "true" : "false",
+                      hex);
+        if (w < (int) cap) w += json_str(out + w, cap - w, nm ? nm : "");
+        if (w < (int) cap) w += snprintf(out + w, cap - w, "}");
+    }
+    if (w < (int) cap) w += snprintf(out + w, cap - w, "]}");
+    return w;
+}
+
 extern "C" int fs_open_custom(struct fs_file *file, const char *name) {
     if (strcmp(name, "/") == 0 || strcmp(name, "/index.html") == 0) {
         return make_file(file, "200 OK", "text/html; charset=utf-8",
@@ -359,7 +397,7 @@ extern "C" int fs_open_custom(struct fs_file *file, const char *name) {
     // Shared JSON scratch: make_file() copies the body into its own malloc'd
     // buffer before returning, and httpd serves one custom file at a time, so a
     // single static buffer is safe for both JSON routes (saves BSS -> heap).
-    static char body[512];
+    static char body[768]; // sized for /api/slots at 4 slots
     if (strcmp(name, "/api/config") == 0) {
         const int len = json_config(body, sizeof(body));
         return make_file(file, "200 OK", "application/json", body, len);
@@ -372,9 +410,20 @@ extern "C" int fs_open_custom(struct fs_file *file, const char *name) {
         const int len = json_status(body, sizeof(body));
         return make_file(file, "200 OK", "application/json", body, len);
     }
+    if (strcmp(name, "/api/slots") == 0) {
+        const int len = json_slots(body, sizeof(body));
+        return make_file(file, "200 OK", "application/json", body, len);
+    }
     // POST /api/config redirects here when config_save() failed to reach flash.
     // Returning a non-2xx status makes the page's `r.ok` check false so it shows
     // an error instead of "Saved ✓" for a change that never persisted.
+    // POST /api/bonds action=pair redirects here when the pairing request was
+    // refused (all bond seats occupied, or all slots connected on a multi-slot
+    // build). Non-2xx so the page can show a specific message.
+    if (strcmp(name, "/api/pair-rejected") == 0) {
+        static const char pr[] = "pairing rejected: no free controller slot or bond seat";
+        return make_file(file, "409 Conflict", "text/plain", pr, sizeof(pr) - 1);
+    }
     if (strcmp(name, "/api/save-failed") == 0) {
         static const char sf[] = "config save failed: flash not written";
         return make_file(file, "500 Internal Server Error", "text/plain", sf, sizeof(sf) - 1);
@@ -414,6 +463,7 @@ static u16_t post_pos;
 static void *post_conn;
 static bool post_is_bonds; // which endpoint the in-flight POST targets
 static bool last_save_ok = true; // result of the most recent config_save()
+static bool last_pair_rejected = false; // pair action refused (no free bond/slot)
 
 static int clampi(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
@@ -471,6 +521,8 @@ static void apply_post(char *body) {
             c.audio_buffer_length = (uint8_t) clampi(val, 16, 128);
         } else if (strcmp(tok, "controller_mode") == 0) {
             c.controller_mode = (uint8_t) clampi(val, 0, 2);
+        } else if (strcmp(tok, "audio_slot") == 0) {
+            c.audio_slot = (uint8_t) clampi(val, 0, BT_MAX_SLOTS - 1);
         } else if (strcmp(tok, "webconfig_subnet") == 0) {
             c.webconfig_subnet = (uint8_t) clampi(val, 0, WEBCONFIG_SUBNET_MAX);
         } else if (strcmp(tok, "webconfig_custom_ip") == 0) {
@@ -509,6 +561,7 @@ static void apply_bonds_post(char *body) {
     char addr_hex[16] = "";
     char name[CONFIG_BOND_NAME_LEN] = "";
     last_save_ok = true; // actions that don't persist (e.g. pair) leave this true
+    last_pair_rejected = false;
 
     for (char *tok = strtok(body, "&"); tok; tok = strtok(nullptr, "&")) {
         char *eq = strchr(tok, '=');
@@ -527,8 +580,11 @@ static void apply_bonds_post(char *body) {
     if (strcmp(action, "pair") == 0) {
         // Open a fresh inquiry to add another controller. Normally the dongle
         // only inquires when nothing is bonded; this is the deliberate opt-in.
-        bt_start_pairing();
-        printf("[NET] start pairing (open inquiry) via web UI\n");
+        // Rejected (false) when every bond seat is occupied, or on a
+        // multi-slot build when all slots are connected.
+        last_pair_rejected = !bt_start_pairing();
+        printf("[NET] start pairing (open inquiry) via web UI: %s\n",
+               last_pair_rejected ? "REJECTED" : "OK");
         return;
     }
 
@@ -599,7 +655,8 @@ extern "C" void httpd_post_finished(void *connection, char *response_uri, u16_t 
     if (post_is_bonds) {
         apply_bonds_post(post_buf);
         snprintf(response_uri, response_uri_len,
-                 last_save_ok ? "/api/bonds" : "/api/save-failed");
+                 last_pair_rejected ? "/api/pair-rejected"
+                 : (last_save_ok ? "/api/bonds" : "/api/save-failed"));
     } else {
         apply_post(post_buf);
         snprintf(response_uri, response_uri_len,

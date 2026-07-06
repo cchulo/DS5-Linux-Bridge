@@ -44,6 +44,7 @@ struct BtStatus {
     uint8_t battery_pct;  // 0-100 (DS5 reports in 10% steps); 0 if unknown
     bool    charging;     // true while the controller is charging or full
     bool    battery_valid;// false until a fresh input report has been seen
+    uint8_t addr[6];      // controller BD_ADDR; zeros when not connected
 };
 void bt_get_status(uint8_t slot, BtStatus *out);
 

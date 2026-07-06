@@ -6,6 +6,7 @@
 #include <cstring>
 
 #include "state_mgr.h"
+#include "tier.h"
 #include "utils.h"
 
 namespace {
@@ -61,17 +62,18 @@ void state_reset_mute() {
     g_firmware_mic_muted = false;
     g_host_hid_manages_mute = false;
     g_last_uac_mute = 0xFF;
-    state[BT_USB_SLOT][8] = 0; // MuteLight::Off
-    state[BT_USB_SLOT][9] &= ~(1 << 4); // Clear MicMute bit (bit 4 of byte 9)
+    state[tier_audio_slot()][8] = 0; // MuteLight::Off
+    state[tier_audio_slot()][9] &= ~(1 << 4); // Clear MicMute bit (bit 4 of byte 9)
 }
 
 void state_set_local_mute(bool muted) {
+    uint8_t *st = state[tier_audio_slot()];
     if (muted) {
-        state[BT_USB_SLOT][8] = 1; // MuteLight::On (solid orange)
-        state[BT_USB_SLOT][9] |= (1 << 4); // MicMute bit
+        st[8] = 1; // MuteLight::On (solid orange)
+        st[9] |= (1 << 4); // MicMute bit
     } else {
-        state[BT_USB_SLOT][8] = 0; // MuteLight::Off
-        state[BT_USB_SLOT][9] &= ~(1 << 4); // Clear MicMute bit
+        st[8] = 0; // MuteLight::Off
+        st[9] &= ~(1 << 4); // Clear MicMute bit
     }
 }
 
@@ -173,9 +175,9 @@ void state_update(uint8_t slot, const uint8_t *data, const uint8_t size) {
         sizeof(uint8_t)
     );*/
 
-    // Hybrid mute only applies to the USB-exposed slot (the one whose audio
-    // path is live); other slots take the mute-light bytes verbatim below.
-    if (slot == BT_USB_SLOT) {
+    // Hybrid mute only applies to the designated audio slot (the one whose
+    // audio path is live); other slots take the mute-light bytes verbatim.
+    if (slot == tier_audio_slot()) {
         if ((update.AllowMuteLight && update.MuteLightMode == MuteLight::On) ||
             (update.AllowAudioMute && update.MicMute)) {
             g_host_hid_manages_mute = true;

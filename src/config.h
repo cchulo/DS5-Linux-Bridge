@@ -55,6 +55,9 @@ struct __attribute__((packed)) Config_body {
     uint8_t webconfig_custom_ip[4];
     BondName bond_names[CONFIG_MAX_BOND_NAMES]; // nicknames for paired controllers
     // --- append new fields BELOW this line only (see append-only note above) ---
+    // Designated audio slot (multi-slot builds): which controller owns the
+    // speaker/mic/HD-haptics path when 2 pads are connected. See tier.h.
+    uint8_t audio_slot; // [0, MULTI_SLOT_COUNT-1]
 };
 
 struct __attribute__((packed)) Config {

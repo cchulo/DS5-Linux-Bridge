@@ -19,6 +19,7 @@
 #include "classic/sdp_server.h"
 #include "config.h"
 #include "state_mgr.h"
+#include "tier.h"
 #include "dse.h"
 #include "wake.h"
 #include "pico/util/queue.h"
@@ -519,6 +520,11 @@ void bt_get_status(uint8_t slot, BtStatus *out) {
     const bt_slot &s = slots[slot];
     out->connected = (s.acl_handle != HCI_CON_HANDLE_INVALID);
     out->is_dse = s.is_dse;
+    if (out->connected) {
+        memcpy(out->addr, s.addr, sizeof(out->addr));
+    } else {
+        memset(out->addr, 0, sizeof(out->addr));
+    }
 
     // DS5 battery byte: low nibble = level (0-10 -> 0-100% in 10% steps),
     // high nibble = power state (0 discharging, 1 charging, 2 full).
@@ -849,7 +855,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             if (s) {
                 printf("[HCI] Slot %d disconnected\n", slot_index(s));
                 slot_clear(s);
-                if (slot_index(s) == BT_USB_SLOT) {
+                if (slot_index(s) == tier_audio_slot()) {
                     state_reset_mute();
                 }
 #if BT_MAX_SLOTS > 1

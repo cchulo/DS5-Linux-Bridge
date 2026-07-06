@@ -18,6 +18,7 @@
 #include "config.h"
 #include "dse.h"
 #include "usb_net.h"
+#include "tier.h"
 
 #if ENABLE_BATT_LED
 #include "battery_led.h"
@@ -125,7 +126,7 @@ void state_push_to_bt() {
   if (spk_active) {
     return;
   }
-  state_push_slot_to_bt(BT_USB_SLOT);
+  state_push_slot_to_bt(tier_audio_slot());
 }
 
 void on_bt_data(uint8_t slot, CHANNEL_TYPE channel, uint8_t *data,
@@ -134,18 +135,18 @@ void on_bt_data(uint8_t slot, CHANNEL_TYPE channel, uint8_t *data,
   //        channel, len);
   if (channel == INTERRUPT && len > 2 && data[1] == 0x31) {
     if (data[2] >> 1 & 1) {
-      // Controller mic audio rides in the input report. Only the USB-exposed
-      // slot's audio path is live; other slots shouldn't be streaming (the
+      // Controller mic audio rides in the input report. Only the designated
+      // audio slot's path is live; other slots shouldn't be streaming (the
       // tier policy keeps their mic off), so drop any stray frames.
-      if (slot == BT_USB_SLOT) {
+      if (slot == tier_audio_slot() && tier_audio_allowed()) {
         mic_add_queue(data + 4);
       }
       return;
     }
 
     // Mute button detection (data[12] corresponds to byte 9 of input data).
-    // Mute/jack are audio-path concerns -> USB-exposed slot only.
-    if (slot == BT_USB_SLOT && !g_host_hid_manages_mute) {
+    // Mute/jack are audio-path concerns -> designated audio slot only.
+    if (slot == tier_audio_slot() && !g_host_hid_manages_mute) {
       static bool prev_mute_pressed = false;
       bool mute_pressed = (data[12] & 0x04) != 0;
       if (mute_pressed && !prev_mute_pressed) {
@@ -159,7 +160,7 @@ void on_bt_data(uint8_t slot, CHANNEL_TYPE channel, uint8_t *data,
     // Track actual DS5 jack state separately — interrupt_in_data[..][53]
     // has its HP_DETECT bit forced high for host UCM routing and cannot
     // be used as the previous-state comparison here.
-    if (slot == BT_USB_SLOT) {
+    if (slot == tier_audio_slot()) {
       static uint8_t last_jack_state =
           0xFF; // sentinel: force set_headset on first report
       const uint8_t cur_jack_state = data[56] & 1;
@@ -342,7 +343,7 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id,
       // (Ported from upstream awalol/DS5Dongle 07ecbb3, issue #182.)
       bool send_now = ((buffer[1] >> 1) & 1) ||  // UseRumbleNotHaptics
                       ((buffer[39] >> 3) & 1);   // UseRumbleNotHaptics2
-      if (!send_now && slot == BT_USB_SLOT && spk_active) {
+      if (!send_now && slot == tier_audio_slot() && spk_active) {
         break;
       }
       state_push_slot_to_bt(slot);
