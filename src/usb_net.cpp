@@ -660,15 +660,17 @@ static void apply_slots_post(char *body) {
            last_action_ok ? "OK" : "REJECTED");
 }
 
-// POST /api/led -- form fields: action=set|chase|lowbatt|clear, rgb=RRGGBB,
-// pixel=<n>|all, level=yellow|red (lowbatt only). Drives the LED debug
-// override (auto-reverts after 60 s).
+// POST /api/led -- form fields: action=set|chase|sim|clear, rgb=RRGGBB,
+// pixel=<n>|all, and for sim: slot=<n>|all, level=normal|low|critical
+// (per-slot battery-state preview overlaid on live status). Drives the LED
+// debug override (auto-reverts after 60 s).
 #ifdef ENABLE_LED_STRIP
 static void apply_led_post(char *body) {
     char action[8] = "";
     char rgbhex[8] = "";
     char pixel[8] = "all";
-    char level[8] = "yellow";
+    char slot[8] = "all";
+    char level[12] = "";
     for (char *tok = strtok(body, "&"); tok; tok = strtok(nullptr, "&")) {
         char *eq = strchr(tok, '=');
         if (!eq) continue;
@@ -676,6 +678,7 @@ static void apply_led_post(char *body) {
         if (strcmp(tok, "action") == 0) strncpy(action, eq, sizeof(action) - 1);
         else if (strcmp(tok, "rgb") == 0) strncpy(rgbhex, eq, sizeof(rgbhex) - 1);
         else if (strcmp(tok, "pixel") == 0) strncpy(pixel, eq, sizeof(pixel) - 1);
+        else if (strcmp(tok, "slot") == 0) strncpy(slot, eq, sizeof(slot) - 1);
         else if (strcmp(tok, "level") == 0) strncpy(level, eq, sizeof(level) - 1);
     }
     uint8_t r = 0, g = 0, b = 0;
@@ -690,9 +693,16 @@ static void apply_led_post(char *body) {
         ledstrip_debug_set_pixel(strcmp(pixel, "all") == 0 ? -1 : atoi(pixel), r, g, b);
     } else if (strcmp(action, "chase") == 0) {
         ledstrip_debug_chase(r, g, b);
-    } else if (strcmp(action, "lowbatt") == 0) {
-        ledstrip_debug_lowbatt(strcmp(pixel, "all") == 0 ? -1 : atoi(pixel),
-                               strcmp(level, "red") == 0);
+    } else if (strcmp(action, "sim") == 0) {
+        int lvl = -1;
+        if (strcmp(level, "normal") == 0) lvl = 0;
+        else if (strcmp(level, "low") == 0) lvl = 1;
+        else if (strcmp(level, "critical") == 0) lvl = 2;
+        if (lvl < 0) {
+            last_action_ok = false;
+        } else {
+            ledstrip_debug_slot_sim(strcmp(slot, "all") == 0 ? -1 : atoi(slot), lvl);
+        }
     } else if (strcmp(action, "clear") == 0) {
         ledstrip_debug_clear();
     } else {

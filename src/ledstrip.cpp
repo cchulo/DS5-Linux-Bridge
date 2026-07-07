@@ -27,12 +27,12 @@ constexpr int slot_pixel(int slot) { return slot * 2 + 1; }
 // ~30 Hz. The inter-frame gap also serves as the WS2812B latch/reset time:
 // newer (V5) batches need >= 280 us, and 33 ms clears that easily.
 constexpr uint64_t FRAME_INTERVAL_US = 33'000;
-// Global brightness cap, /255. 26 = 10% per the hardware spec; also keeps
+// Global brightness cap, /255. 13 = 5% per the hardware spec; also keeps
 // worst-case draw from VBUS negligible (4 lit LEDs well under 30 mA).
-constexpr uint16_t BRIGHTNESS_CAP = 26;
+constexpr uint16_t BRIGHTNESS_CAP = 13;
 constexpr float    GAMMA          = 2.2f;
 
-constexpr uint8_t GREEN[3]  = {0, 255, 0};
+constexpr uint8_t BLUE[3]   = {0, 0, 255}; // connected / battery OK
 constexpr uint8_t YELLOW[3] = {255, 200, 0};
 constexpr uint8_t RED[3]    = {255, 0, 0};
 
@@ -59,11 +59,14 @@ uint64_t dbg_until_us = 0;
 int      dbg_chase = -1;
 uint8_t  dbg_chase_rgb[3];
 uint8_t  dbg_px[PIXEL_COUNT][3];
-// Low-battery simulation: -1 off, 0 yellow (<=20%), 1 red/critical (<=10%).
-// Uses the exact production colors and blink cadence so the web UI can
-// preview what a dying pad will look like.
-int      dbg_batt = -1;
-int      dbg_batt_pixel = -1; // <0 = all slot-indicator pixels
+// Per-slot low-battery simulation overlay: 0 = live status, 1 = low
+// (yellow blink), 2 = critical (red blink). Unlike the global debug modes
+// above, this overlays the NORMAL rendering, so one slot can preview a dying
+// pad while the others keep showing their real state. Uses the exact
+// production colors and cadence.
+uint8_t  sim_level[BT_MAX_SLOTS] = {};
+bool     sim_any = false;
+uint64_t sim_until_us = 0;
 
 // Gamma-correct then apply the global cap.
 inline uint8_t shape(uint8_t v) {
@@ -95,12 +98,11 @@ void ledstrip_init() {
 
 void ledstrip_debug_set_pixel(int pixel, uint8_t r, uint8_t g, uint8_t b) {
     if (!led_ready) return;
-    if (!dbg_active || dbg_chase >= 0 || dbg_batt >= 0) {
+    if (!dbg_active || dbg_chase >= 0) {
         // Entering static debug mode: start from an all-dark canvas.
         for (auto &px : dbg_px) px[0] = px[1] = px[2] = 0;
     }
     dbg_chase = -1;
-    dbg_batt = -1;
     if (pixel < 0) {
         for (auto &px : dbg_px) { px[0] = r; px[1] = g; px[2] = b; }
     } else if (pixel < PIXEL_COUNT) {
@@ -113,21 +115,25 @@ void ledstrip_debug_set_pixel(int pixel, uint8_t r, uint8_t g, uint8_t b) {
     printf("[LED] debug set pixel %d = %u,%u,%u\n", pixel, r, g, b);
 }
 
-void ledstrip_debug_lowbatt(int pixel, bool critical) {
+void ledstrip_debug_slot_sim(int slot, int level) {
     if (!led_ready) return;
-    dbg_chase = -1;
-    dbg_batt = critical ? 1 : 0;
-    dbg_batt_pixel = (pixel >= 0 && pixel < PIXEL_COUNT) ? pixel : -1;
-    dbg_active = true;
-    dbg_until_us = time_us_64() + DEBUG_TIMEOUT_US;
-    printf("[LED] debug low-batt sim (%s) pixel %d\n",
-           critical ? "red" : "yellow", pixel);
+    if (level < 0 || level > 2) return;
+    if (slot < 0) {
+        for (auto &s : sim_level) s = (uint8_t) level;
+    } else if (slot < BT_MAX_SLOTS) {
+        sim_level[slot] = (uint8_t) level;
+    } else {
+        return;
+    }
+    sim_any = false;
+    for (auto s : sim_level) sim_any |= (s != 0);
+    sim_until_us = time_us_64() + DEBUG_TIMEOUT_US;
+    printf("[LED] debug slot sim: slot %d level %d\n", slot, level);
 }
 
 void ledstrip_debug_chase(uint8_t r, uint8_t g, uint8_t b) {
     if (!led_ready) return;
     dbg_chase = 1;
-    dbg_batt = -1;
     dbg_chase_rgb[0] = r;
     dbg_chase_rgb[1] = g;
     dbg_chase_rgb[2] = b;
@@ -138,6 +144,8 @@ void ledstrip_debug_chase(uint8_t r, uint8_t g, uint8_t b) {
 
 void ledstrip_debug_clear() {
     dbg_active = false;
+    for (auto &s : sim_level) s = 0;
+    sim_any = false;
     printf("[LED] debug cleared\n");
 }
 
@@ -161,24 +169,6 @@ void ledstrip_tick() {
             frame[lit][0] = dbg_chase_rgb[0];
             frame[lit][1] = dbg_chase_rgb[1];
             frame[lit][2] = dbg_chase_rgb[2];
-        } else if (dbg_batt >= 0) {
-            // Same colors/cadence as the real low-battery states below.
-            const uint8_t *color = dbg_batt ? RED : YELLOW;
-            const uint32_t period = dbg_batt ? BLINK_RED_MS : BLINK_YELLOW_MS;
-            if (blink_on(ms, period)) {
-                if (dbg_batt_pixel >= 0) {
-                    frame[dbg_batt_pixel][0] = color[0];
-                    frame[dbg_batt_pixel][1] = color[1];
-                    frame[dbg_batt_pixel][2] = color[2];
-                } else {
-                    for (int s = 0; s < BT_MAX_SLOTS; s++) {
-                        uint8_t *px = frame[slot_pixel(s)];
-                        px[0] = color[0];
-                        px[1] = color[1];
-                        px[2] = color[2];
-                    }
-                }
-            }
         } else {
             for (int i = 0; i < PIXEL_COUNT; i++) {
                 frame[i][0] = dbg_px[i][0];
@@ -195,15 +185,35 @@ void ledstrip_tick() {
         return;
     }
 
+    if (sim_any && now >= sim_until_us) {
+        for (auto &s : sim_level) s = 0;
+        sim_any = false;
+        printf("[LED] slot sim timed out, back to live status\n");
+    }
+
     for (uint8_t slot = 0; slot < BT_MAX_SLOTS; slot++) {
+        // Simulation overlay: preview this slot's low/critical blink (real
+        // colors and cadence) while the other slots keep live status.
+        if (sim_any && sim_level[slot] != 0) {
+            const bool crit = sim_level[slot] == 2;
+            if (blink_on(ms, crit ? BLINK_RED_MS : BLINK_YELLOW_MS)) {
+                const uint8_t *color = crit ? RED : YELLOW;
+                uint8_t *px = frame[slot_pixel(slot)];
+                px[0] = color[0];
+                px[1] = color[1];
+                px[2] = color[2];
+            }
+            continue;
+        }
+
         BtStatus st;
         bt_get_status(slot, &st);
         if (!st.connected) continue; // off
 
-        const uint8_t *color = GREEN;
+        const uint8_t *color = BLUE;
         bool on = true;
         // Low-battery blinks only while discharging: a charging pad at 10%
-        // is recovering, not dying, so it shows steady green.
+        // is recovering, not dying, so it shows steady blue.
         if (st.battery_valid && !st.charging) {
             if (st.battery_pct <= LOW_BATT_RED_PCT) {
                 color = RED;

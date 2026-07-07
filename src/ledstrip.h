@@ -5,10 +5,10 @@
 // (0,2,4,6) are always dark, odd pixels (1,3,5,7) indicate controller slots
 // 1-4. Per slot:
 //   off             = no controller connected
-//   solid green     = connected
+//   solid blue      = connected
 //   blinking yellow = battery <= 20% (discharging)
 //   blinking red    = battery <= 10% (discharging; faster blink)
-// Global brightness is capped at 10%.
+// Global brightness is capped at 5%.
 //
 // Rendered from the main loop at ~30 Hz via a PIO state machine (claimed
 // dynamically so it can never collide with the CYW43 radio's PIO SPI).
@@ -40,11 +40,12 @@ void ledstrip_debug_set_pixel(int pixel, uint8_t r, uint8_t g, uint8_t b);
 // Single lit pixel walking the chain in the given color.
 void ledstrip_debug_chase(uint8_t r, uint8_t g, uint8_t b);
 
-// Simulate a low-battery state with the production colors and cadence:
-// critical=false -> yellow blink (<=20%), critical=true -> red blink (<=10%,
-// faster). pixel < 0 applies it to every slot-indicator pixel (spacers stay
-// dark, matching what a real all-pads-dying strip would show).
-void ledstrip_debug_lowbatt(int pixel, bool critical);
+// Per-slot battery-state simulation, overlaid on the LIVE status display
+// (other slots keep showing their real state). level: 0 = back to live,
+// 1 = low (yellow blink, as at <=20%), 2 = critical (red blink, as at
+// <=10%). slot < 0 applies the level to every slot. Same 60 s auto-revert
+// as the other debug modes; ledstrip_debug_clear() also clears it.
+void ledstrip_debug_slot_sim(int slot, int level);
 
 // Leave debug mode and resume normal status rendering.
 void ledstrip_debug_clear();

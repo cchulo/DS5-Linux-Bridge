@@ -60,7 +60,9 @@ h2{font-size:1.1rem;margin-bottom:.3rem}
 select.mv{width:auto;font-size:.72rem;padding:.1rem .3rem;background:#252525;border:1px solid #3a3a3a;color:#9ca3af;border-radius:6px}
 #led_dbg input[type=color]{width:3rem;height:2.1rem;padding:0;border:1px solid #444;background:#222;border-radius:4px}
 #led_dbg select{width:auto}
-#led_dbg button{margin-top:0}
+#led_dbg button{margin-top:0;padding:.4rem .9rem;font-size:.85rem;background:#3a3a3a}
+.ledrow{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-top:.6rem}
+.ledrow .ledlbl{color:#888;font-size:.85rem;min-width:6.5rem}
 .batt{display:inline-flex;align-items:center;gap:.35rem}
 .batt .bar{width:34px;height:14px;border:1px solid #888;border-radius:2px;position:relative;padding:1px}
 .batt .bar::after{content:"";position:absolute;right:-3px;top:4px;width:2px;height:6px;background:#888}
@@ -169,17 +171,21 @@ footer .kofi:hover{text-decoration:none;opacity:.9}
 <div id="led_dbg" style="display:none">
 <hr>
 <h2>LED debug</h2>
-<div class="hint">Drives the WS2812B chain directly (still brightness-capped).
-Reverts to normal status display automatically after 60&nbsp;s.</div>
-<div class="btns" style="flex-wrap:wrap;margin-top:.6rem">
-  <input type="color" id="led_color" value="#00ff00">
-  <select id="led_pixel"><option value="all">all pixels</option></select>
-  <button id="led_set">Set</button>
+<div class="hint">Drives the WS2812B strip directly (still brightness-capped).
+Everything reverts to the live status display automatically after 60&nbsp;s.</div>
+<div class="ledrow">
+  <span class="ledlbl">Simulate slot</span>
+  <select id="led_slot"></select>
+  <button id="led_sim_low">Low battery</button>
+  <button id="led_sim_crit">Critical</button>
+  <button id="led_sim_norm">Normal</button>
+</div>
+<div class="ledrow">
+  <span class="ledlbl">Whole strip</span>
+  <input type="color" id="led_color" value="#0000ff">
   <button id="led_chase">Chase</button>
-  <button id="led_lowy">🟡 Low batt</button>
-  <button id="led_lowr">🔴 Critical</button>
   <button id="led_off">All off</button>
-  <button id="led_normal">Normal</button>
+  <button id="led_normal">All normal</button>
   <span id="lstatus"></span>
 </div>
 </div>
@@ -331,15 +337,15 @@ function slotRow(d,s){
   if(s.battery_valid){
     const b=document.createElement('span');
     b.className='s'+((s.battery_pct<=20&&!s.charging)?' lowb':'');
-    b.textContent='🔋'+s.battery_pct+'%'+(s.charging?' ⚡':'');
+    b.textContent=s.battery_pct+'%'+(s.charging?' charging':'');
     row.append(b);
   }
   // Feature availability at the current tier: rumble + adaptive triggers
   // always work on every pad; speaker/HD haptics/mic stream only while a
   // single pad is connected (Bluetooth bandwidth).
-  row.append(chip('💥 rumble'),chip('🎯 triggers'));
+  row.append(chip('rumble'),chip('triggers'));
   if(d.audio_allowed&&s.slot===d.audio_slot){
-    row.append(chip('🔊 audio','aud'),chip('📳 HD haptics','aud'),chip('🎤 mic','aud'));
+    row.append(chip('audio','aud'),chip('HD haptics','aud'),chip('mic','aud'));
   }
   if(d.max>1){
     const mv=document.createElement('select');mv.className='mv';
@@ -377,11 +383,11 @@ async function loadStatus(){
     (d.slots||[]).forEach(s=>card.appendChild(slotRow(d,s)));
     if(d.led){
       $('led_dbg').style.display='';
-      const sel=$('led_pixel');
-      if(sel.options.length===1){
-        for(let i=0;i<d.max*2;i++){
+      const sel=$('led_slot');
+      if(sel.options.length===0){
+        for(let i=0;i<d.max;i++){
           const o=document.createElement('option');o.value=i;
-          o.textContent='pixel '+(i+1);
+          o.textContent='Slot '+(i+1);
           sel.appendChild(o);
         }
       }
@@ -402,10 +408,10 @@ async function postLed(body){
     st.className=r.ok?'ok':'err';st.textContent=r.ok?'✓':'failed';
   }catch(e){st.className='err';st.textContent='failed'}
 }
-$('led_set').onclick=()=>postLed('action=set&rgb='+$('led_color').value.slice(1)+'&pixel='+$('led_pixel').value);
+$('led_sim_low').onclick=()=>postLed('action=sim&slot='+$('led_slot').value+'&level=low');
+$('led_sim_crit').onclick=()=>postLed('action=sim&slot='+$('led_slot').value+'&level=critical');
+$('led_sim_norm').onclick=()=>postLed('action=sim&slot='+$('led_slot').value+'&level=normal');
 $('led_chase').onclick=()=>postLed('action=chase&rgb='+$('led_color').value.slice(1));
-$('led_lowy').onclick=()=>postLed('action=lowbatt&level=yellow&pixel='+$('led_pixel').value);
-$('led_lowr').onclick=()=>postLed('action=lowbatt&level=red&pixel='+$('led_pixel').value);
 $('led_off').onclick=()=>postLed('action=set&rgb=000000&pixel=all');
 $('led_normal').onclick=()=>postLed('action=clear');
 
