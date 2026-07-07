@@ -43,6 +43,7 @@
 #endif
 #include "config.h"
 #include "web_page.h"
+#include "weblog.h"
 
 //--------------------------------------------------------------------+
 // TinyUSB network glue (pattern from examples/device/net_lwip_webserver)
@@ -439,6 +440,13 @@ extern "C" int fs_open_custom(struct fs_file *file, const char *name) {
     if (strcmp(name, "/api/slots") == 0) {
         const int len = json_slots(body, sizeof(body));
         return make_file(file, "200 OK", "application/json", body, len);
+    }
+    // Firmware log (RAM ring of all printf diagnostics; see weblog.h).
+    // Plain text so it reads directly in a browser tab.
+    if (strcmp(name, "/api/log") == 0) {
+        static char logbuf[4097];
+        const int len = weblog_snapshot(logbuf, sizeof(logbuf));
+        return make_file(file, "200 OK", "text/plain; charset=utf-8", logbuf, len);
     }
     // POST /api/config redirects here when config_save() failed to reach flash.
     // Returning a non-2xx status makes the page's `r.ok` check false so it shows

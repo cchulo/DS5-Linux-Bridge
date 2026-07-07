@@ -13,6 +13,7 @@
 #include "usb.h"
 #include "utils.h"
 #include "wake.h"
+#include "weblog.h"
 #include <cstdio>
 #include <malloc.h>
 
@@ -426,6 +427,9 @@ int main() {
 #endif
 
   board_init();
+  // Mirror all printf diagnostics into a RAM ring served at /api/log, so
+  // logs are readable from the browser without a UART adapter.
+  weblog_init();
   tusb_rhport_init_t dev_init = {.role = TUSB_ROLE_DEVICE,
                                  .speed = TUSB_SPEED_FULL};
   tusb_init(BOARD_TUD_RHPORT, &dev_init);
