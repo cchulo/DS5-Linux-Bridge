@@ -12,7 +12,7 @@
 #include "pico/stdio/driver.h"
 
 namespace {
-constexpr uint32_t RING_SIZE = 4096; // power of two
+constexpr uint32_t RING_SIZE = 2048; // power of two; heap is tight (see audio)
 char ring[RING_SIZE];
 // Total chars ever written; ring index is wpos & (RING_SIZE-1). Races with
 // core1 printfs are tolerable for diagnostics (worst case: garbled chars).

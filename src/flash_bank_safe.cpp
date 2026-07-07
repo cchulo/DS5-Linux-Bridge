@@ -62,6 +62,22 @@ void run_mutation(mutation_op *op) {
         const int rc = flash_safe_execute(do_mutation, op, OP_TIMEOUT_MS);
         watchdog_update();
         if (rc == PICO_OK) return;
+        if (rc == PICO_ERROR_NOT_PERMITTED) {
+            // Core1 hasn't been launched (and registered as a lockout victim)
+            // yet -- this is the TLV bank formatting itself during bt_init(),
+            // before audio_init() starts core1. With only one core running a
+            // direct flash op is inherently safe; flash_safe_execute just
+            // can't know that. This was THE reason bonds never persisted:
+            // the SDK's bank hit the same error at every boot and silently
+            // ignored it, leaving the bank unformatted forever.
+            const uint32_t ints = save_and_disable_interrupts();
+            do_mutation(op);
+            restore_interrupts(ints);
+            watchdog_update();
+            printf("[FLASHBANK] %s done directly (single-core boot phase)\n",
+                   op->op_is_erase ? "erase" : "program");
+            return;
+        }
         printf("[FLASHBANK] %s failed (attempt %d/%d): %d\n",
                op->op_is_erase ? "erase" : "program", attempt + 1, OP_RETRIES, rc);
     }

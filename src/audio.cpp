@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstring>
 #include <cstdio>
+#include <malloc.h> // mallinfo(): heap telemetry around the opus allocations
 #include "opus.h"
 #include "utils.h"
 #include "pico/multicore.h"
@@ -288,6 +289,10 @@ void core1_entry() {
     // instead of letting it fault on XIP. Requires PICO_FLASH_ASSUME_CORE1_SAFE=0.
     flash_safe_execute_core_init();
     int error = 0;
+    // Heap telemetry: the opus encoder (~70 KB) + decoder (~26 KB) are the
+    // largest heap users on a tight heap; log usage so an OOM here is
+    // attributable from /api/log.
+    printf("[Audio] core1 up; heap used %d before opus\n", mallinfo().uordblks);
     encoder = opus_encoder_create(48000, 2,OPUS_APPLICATION_AUDIO, &error);
     if (error != 0) {
         printf("[Audio] OpusEncoder create failed\n");
@@ -301,6 +306,7 @@ void core1_entry() {
     if (error != 0) {
         printf("[Audio] OpusDecoder create failed\n");
     }
+    printf("[Audio] opus ready; heap used %d\n", mallinfo().uordblks);
 
     while (true) {
         bool worked = false;
