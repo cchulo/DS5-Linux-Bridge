@@ -317,8 +317,13 @@ static bool bt_disconnect_slot(bt_slot *s) {
     if (!s || s->acl_handle == HCI_CON_HANDLE_INVALID) {
         return false;
     }
-    // 0x13 = remote user terminated connection
-    hci_send_cmd(&hci_disconnect, s->acl_handle, 0x13);
+    // gap_disconnect() queues through BTstack's HCI state machine. A raw
+    // hci_send_cmd(&hci_disconnect, ...) here broke multi-slot teardown
+    // (forget-all): BTstack has ONE outgoing command buffer, so the second
+    // back-to-back disconnect went out mangled and the controller rejected
+    // it with status 0x02 (unknown connection) -- that pad stayed connected
+    // and immediately re-persisted the link key it was told to forget.
+    gap_disconnect(s->acl_handle);
     return true;
 }
 
