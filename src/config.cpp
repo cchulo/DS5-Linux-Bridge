@@ -319,7 +319,35 @@ bool config_save() {
 }
 
 bool config_factory_reset() {
+  // Preserve the feature snapshot across the reset: it is captured
+  // controller data (calibration / firmware-info / pairing blobs used to
+  // answer bind-time probes for empty slots), not a user setting. Wiping it
+  // forced a re-capture on the next pad connect, whose one-time
+  // usb_request_rebind() bounced the whole USB device off the bus --
+  // gamepads AND the config-page network link -- for no benefit: the host
+  // already enumerated against real data.
+  const uint8_t snap_valid = config.body.feature_snapshot_valid;
+  uint8_t cal_len = config.body.feature_cal_len;
+  uint8_t fw_len = config.body.feature_fw_len;
+  uint8_t pair_len = config.body.feature_pair_len;
+  uint8_t cal[sizeof(config.body.feature_cal)];
+  uint8_t fw[sizeof(config.body.feature_fw)];
+  uint8_t pair[sizeof(config.body.feature_pair)];
+  memcpy(cal, config.body.feature_cal, sizeof(cal));
+  memcpy(fw, config.body.feature_fw, sizeof(fw));
+  memcpy(pair, config.body.feature_pair, sizeof(pair));
+
   config_default();
+
+  config.body.feature_snapshot_valid = snap_valid;
+  config.body.feature_cal_len = cal_len;
+  config.body.feature_fw_len = fw_len;
+  config.body.feature_pair_len = pair_len;
+  memcpy(config.body.feature_cal, cal, sizeof(cal));
+  memcpy(config.body.feature_fw, fw, sizeof(fw));
+  memcpy(config.body.feature_pair, pair, sizeof(pair));
+  config_valid(); // re-check the restored snapshot lengths
+
   return config_save();
 }
 
