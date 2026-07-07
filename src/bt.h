@@ -117,7 +117,13 @@ void bt_slot_colors_refresh();
 void bt_player_led_lock_refresh();
 
 // Tick connection watchdogs (pre-ACL attempt + per-slot setup). Call from main loop.
+// Also drives the pairing-mode LED blink (see bt_pairing_led_active).
 void bt_connection_watchdog_tick();
+
+// True while the onboard LED is being blinked to signal pairing mode (an
+// explicit pairing window, or no controller bonded yet). The low-battery
+// LED blink defers to this so the two never fight over the LED.
+bool bt_pairing_led_active();
 
 //--------------------------------------------------------------------+
 // Paired-device (bond) management, exposed to the web config UI.

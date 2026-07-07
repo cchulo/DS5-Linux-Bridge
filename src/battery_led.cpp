@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "bt.h" // bt_pairing_led_active(): pairing blink owns the LED
 #include "config.h"
 #include "pico/cyw43_arch.h"
 #include "pico/time.h"
@@ -54,6 +55,10 @@ void battery_led_on_disconnect(void) {
 }
 
 void battery_led_tick(void) {
+    // The pairing-mode blink (bt.cpp) owns the LED while active; two blink
+    // patterns toggling at different rates would just look like flicker.
+    // Our state machine resumes cleanly once pairing mode ends.
+    if (bt_pairing_led_active()) return;
     const uint64_t now = time_us_64();
     if (last_report_us == 0 || (now - last_report_us) >= REPORT_STALE_US) {
         // No fresh data — bt.cpp owns the LED while disconnected. If we

@@ -433,7 +433,38 @@ bool bt_start_pairing() {
     return true;
 }
 
+// Blink the onboard LED (~2 Hz) while the dongle is looking for new
+// controllers: an explicit pairing window, or no controller bonded yet (the
+// boot inquiry loop). Deliberately ignores disable_pico_led -- making
+// pairing mode visible is the point. The low-battery blink (battery_led)
+// defers to this via bt_pairing_led_active().
+static uint32_t pairing_led_next_ms = 0;
+static bool pairing_led_state = false;
+static bool pairing_led_shown = false;
+
+bool bt_pairing_led_active() { return pairing_led_shown; }
+
+static void bt_pairing_led_tick() {
+    const uint32_t now = to_ms_since_boot(get_absolute_time());
+    if (now < pairing_led_next_ms) return;
+    pairing_led_next_ms = now + 250; // 2 Hz blink; also throttles the checks
+    const bool active = pairing_window || !bt_has_stored_link_key();
+    if (active) {
+        pairing_led_state = !pairing_led_state;
+        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, pairing_led_state);
+        pairing_led_shown = true;
+    } else if (pairing_led_shown) {
+        pairing_led_shown = false;
+        // Restore the steady state: solid while any pad is connected (and
+        // the LED isn't disabled), off otherwise.
+        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN,
+                            bt_connected_count() > 0 &&
+                                !get_config().disable_pico_led);
+    }
+}
+
 void bt_connection_watchdog_tick() {
+    bt_pairing_led_tick();
     const absolute_time_t now = get_absolute_time();
     // Pre-ACL attempt (outgoing create / incoming accept that never completed).
     if (connect_attempt_started != 0 &&
