@@ -435,20 +435,25 @@ bool bt_start_pairing() {
 
 // Blink the onboard LED (~2 Hz) while the dongle is looking for new
 // controllers: an explicit pairing window, or no controller bonded yet (the
-// boot inquiry loop). Deliberately ignores disable_pico_led -- making
-// pairing mode visible is the point. The low-battery blink (battery_led)
-// defers to this via bt_pairing_led_active().
+// boot inquiry loop). disable_pico_led is a full master switch for the
+// onboard LED (steady, low-battery, and pairing states alike), but the LED
+// strip's pairing indicator keys off bt_pairing_mode_active() and keeps
+// working regardless. The low-battery blink (battery_led) defers to this
+// via bt_pairing_led_active().
 static uint32_t pairing_led_next_ms = 0;
 static bool pairing_led_state = false;
 static bool pairing_led_shown = false;
+static bool pairing_mode_now = false; // cached raw condition (refreshed 4 Hz)
 
 bool bt_pairing_led_active() { return pairing_led_shown; }
+bool bt_pairing_mode_active() { return pairing_mode_now; }
 
 static void bt_pairing_led_tick() {
     const uint32_t now = to_ms_since_boot(get_absolute_time());
     if (now < pairing_led_next_ms) return;
     pairing_led_next_ms = now + 250; // 2 Hz blink; also throttles the checks
-    const bool active = pairing_window || !bt_has_stored_link_key();
+    pairing_mode_now = pairing_window || !bt_has_stored_link_key();
+    const bool active = pairing_mode_now && !get_config().disable_pico_led;
     if (active) {
         pairing_led_state = !pairing_led_state;
         cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, pairing_led_state);

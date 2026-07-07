@@ -101,6 +101,12 @@ struct __attribute__((packed)) Config_body {
     // host stays in control (stock behavior). Stored inverted so the
     // migrated/zero default means "lock on". Web UI toggle in Lights.
     uint8_t disable_player_led_lock; // 0 = lock active (default), 1 = host-controlled
+    // Strip pixels to blink (white, ~2 Hz) while pairing mode is active,
+    // chosen from the same clickable grid as the slot masks and governed by
+    // the same led_map_valid flag. Default: the spacer pixels of the classic
+    // alternating layout (0,2,4,6), so pairing lights the gaps between the
+    // slot indicators.
+    uint32_t pairing_led_mask;
 };
 
 struct __attribute__((packed)) Config {

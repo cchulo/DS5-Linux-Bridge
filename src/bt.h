@@ -120,10 +120,15 @@ void bt_player_led_lock_refresh();
 // Also drives the pairing-mode LED blink (see bt_pairing_led_active).
 void bt_connection_watchdog_tick();
 
-// True while the onboard LED is being blinked to signal pairing mode (an
-// explicit pairing window, or no controller bonded yet). The low-battery
-// LED blink defers to this so the two never fight over the LED.
+// True while the onboard LED is being blinked to signal pairing mode. The
+// low-battery LED blink defers to this so the two never fight over the LED.
+// Always false while disable_pico_led is set.
 bool bt_pairing_led_active();
+
+// True while pairing mode itself is active (an explicit pairing window, or
+// no controller bonded yet), independent of the onboard-LED setting. The LED
+// strip's pairing indicator keys off this.
+bool bt_pairing_mode_active();
 
 //--------------------------------------------------------------------+
 // Paired-device (bond) management, exposed to the web config UI.

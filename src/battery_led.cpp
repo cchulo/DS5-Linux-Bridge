@@ -59,6 +59,17 @@ void battery_led_tick(void) {
     // patterns toggling at different rates would just look like flicker.
     // Our state machine resumes cleanly once pairing mode ends.
     if (bt_pairing_led_active()) return;
+    // disable_pico_led is a full master switch for the onboard LED: it
+    // silences the low-battery blink too (the strip's per-slot yellow/red
+    // warnings still show battery state).
+    if (get_config().disable_pico_led) {
+        if (blinking) {
+            blinking = false;
+            led_state = false;
+            cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
+        }
+        return;
+    }
     const uint64_t now = time_us_64();
     if (last_report_us == 0 || (now - last_report_us) >= REPORT_STALE_US) {
         // No fresh data — bt.cpp owns the LED while disconnected. If we
@@ -78,7 +89,6 @@ void battery_led_tick(void) {
     const bool low    = (st == POWER_STATE_DISCHARGING) && (pct <= THRESHOLD_LEVEL);
 
     if (low) {
-        // Critical warning: override disable_pico_led so the user always sees it.
         if (!blinking) {
             blinking = true;
             led_state = true;

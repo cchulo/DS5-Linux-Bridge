@@ -183,7 +183,8 @@ footer .kofi:hover{text-decoration:none;opacity:.9}
   <div id="led_map" style="margin-top:.6rem"></div>
   <div class="hint">Click the LEDs each slot should light — any shape works
   (line, ring, square…). LEDs are numbered from the first one on the strip.
-  Unassigned LEDs stay dark.</div>
+  Unassigned LEDs stay dark. The <b>Pairing</b> row blinks white while the
+  dongle is searching for a controller.</div>
 </div>
 </div>
 
@@ -316,6 +317,7 @@ async function load(){
     ledCount=c.led_count||8;
     $('led_count').value=ledCount;
     ledMasks=(c.led_masks||['2','8','20','80']).map(h=>parseInt(h,16)>>>0);
+    pairingMask=parseInt(c.pairing_mask||'55',16)>>>0;
     buildLedMap();
     upd.forEach(f=>f());
     $('save').disabled=true;setStatus('');
@@ -340,6 +342,7 @@ async function save(){
   }
   parts.push('led_count='+ledCount);
   for(let i=0;i<4;i++)parts.push('led_mask'+i+'='+(ledMasks[i]>>>0).toString(16));
+  parts.push('pairing_mask='+(pairingMask>>>0).toString(16));
   const body=parts.join('&');
   setStatus('saving…','dirty');
   try{
@@ -456,6 +459,7 @@ let maxSlots=4;
 let ledMax=32;
 let ledCount=8;
 let ledMasks=[2,8,32,128]; // default: slot k -> pixel 2k+1
+let pairingMask=0x55; // default: the spacer pixels blink white in pairing mode
 function slotCss(i){return (slotColors&&slotColors[i])?'#'+slotColors[i]:SLOT_COLORS[i%4]}
 function buildLedMap(){
   const box=$('led_map');box.innerHTML='';
@@ -478,6 +482,25 @@ function buildLedMap(){
     }
     box.appendChild(row);
   }
+  // Pairing row: pixels that blink white while the dongle is searching for
+  // a controller (explicit pairing window, or nothing bonded yet).
+  const prow=document.createElement('div');prow.className='ledmaprow';
+  const pl=document.createElement('span');pl.className='mlbl';pl.textContent='Pairing';
+  prow.appendChild(pl);
+  for(let p=0;p<ledCount;p++){
+    const c=document.createElement('span');c.className='ledcell';
+    c.textContent=p+1;
+    const paint=()=>{
+      const on=!!(pairingMask&(1<<p));
+      c.style.background=on?'#e5e7eb':'#222';
+      c.style.borderColor=on?'#999':'#444';
+      c.style.color=on?'#111':'#666';
+    };
+    paint();
+    c.onclick=()=>{pairingMask^=(1<<p);paint();markDirty()};
+    prow.appendChild(c);
+  }
+  box.appendChild(prow);
 }
 $('led_count').onchange=()=>{
   let v=parseInt($('led_count').value,10);

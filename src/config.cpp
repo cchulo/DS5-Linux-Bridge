@@ -79,6 +79,7 @@ static_assert(offsetof(Config_body, feature_snapshot_valid) == 105);
 static_assert(offsetof(Config_body, slot_rgb) == 261);
 static_assert(offsetof(Config_body, led_count) == 273);
 static_assert(offsetof(Config_body, disable_player_led_lock) == 291);
+static_assert(offsetof(Config_body, pairing_led_mask) == 292);
 static_assert(sizeof(Config_body) <= 320); // keep well inside the 512 B store
 
 // CRC over the first `len` bytes of the body. `len` is the stored size, so an
@@ -167,10 +168,12 @@ void config_valid() {
     body->led_map_valid = 0;
   }
   if (!body->led_map_valid) {
-    // Classic alternating default: slot k lights pixel 2k+1, spacers dark.
+    // Classic alternating default: slot k lights pixel 2k+1, spacers dark;
+    // pairing mode blinks the spacers (pixels 0,2,4,6).
     for (int s = 0; s < 4; s++) {
       body->slot_led_mask[s] = 1u << (s * 2 + 1);
     }
+    body->pairing_led_mask = 0x55;
   }
   if (body->disable_player_led_lock > 1) {
     body->disable_player_led_lock = 0;
