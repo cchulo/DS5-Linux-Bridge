@@ -532,6 +532,23 @@ bool bt_stack_ready() {
     return hci_get_state() == HCI_STATE_WORKING;
 }
 
+void bt_bond_diag(bool *tlv_ok, bool *iter_ok, int *keys) {
+    const btstack_tlv_t *tlv = NULL;
+    void *ctx = NULL;
+    btstack_tlv_get_instance(&tlv, &ctx);
+    *tlv_ok = tlv != NULL;
+    btstack_link_key_iterator_t it;
+    *iter_ok = gap_link_key_iterator_init(&it) != 0;
+    *keys = 0;
+    if (*iter_ok) {
+        bd_addr_t a;
+        link_key_t k;
+        link_key_type_t t;
+        while (gap_link_key_iterator_get_next(&it, a, k, &t)) (*keys)++;
+        gap_link_key_iterator_done(&it);
+    }
+}
+
 int bt_bond_list(uint8_t (*addrs)[BT_ADDR_LEN], int max) {
     if (!addrs || max <= 0) return 0;
     btstack_link_key_iterator_t it;

@@ -326,8 +326,16 @@ static int json_bonds(char *out, size_t cap) {
     char conn_hex[13] = "";
     if (have_conn) addr_to_hex(conn, conn_hex);
 
-    int w = snprintf(out, cap, "{\"ready\":%s,\"connected\":\"%s\",\"max\":%d,\"bonds\":[",
+    bool dbg_tlv = false, dbg_iter = false;
+    int dbg_keys = 0;
+    bt_bond_diag(&dbg_tlv, &dbg_iter, &dbg_keys);
+    int w = snprintf(out, cap,
+                     "{\"ready\":%s,"
+                     "\"dbg\":{\"tlv\":%s,\"iter\":%s,\"keys\":%d},"
+                     "\"connected\":\"%s\",\"max\":%d,\"bonds\":[",
                      bt_stack_ready() ? "true" : "false",
+                     dbg_tlv ? "true" : "false", dbg_iter ? "true" : "false",
+                     dbg_keys,
                      conn_hex, CONFIG_MAX_BOND_NAMES);
     for (int i = 0; i < n && w < (int) cap; i++) {
         char hex[13];

@@ -130,6 +130,11 @@ void bt_connection_watchdog_tick();
 // reports this and the page retries instead of showing "no bonds".
 bool bt_stack_ready();
 
+// Diagnostic snapshot for /api/bonds: whether a BTstack TLV instance exists,
+// whether the link-key iterator initializes, and how many keys it yields.
+// Temporary aid for chasing the empty-bond-list report; cheap read-only probes.
+void bt_bond_diag(bool *tlv_ok, bool *iter_ok, int *keys);
+
 // Copy up to `max` stored bond addresses into addrs (each BT_ADDR_LEN bytes).
 // Returns the number written.
 int bt_bond_list(uint8_t (*addrs)[BT_ADDR_LEN], int max);
