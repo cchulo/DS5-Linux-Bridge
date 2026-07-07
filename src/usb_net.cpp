@@ -343,8 +343,19 @@ static int json_bonds(char *out, size_t cap) {
         addr_to_hex(list[i], hex);
         const char *nm = config_bond_name(list[i]);
         if (!nm) nm = "";
-        w += snprintf(out + w, cap - w, "%s{\"addr\":\"%s\",\"name\":",
-                      i ? "," : "", hex);
+        // Which controller slot (seat) this bond currently occupies, -1 if
+        // not connected. The UI shows it as a colored "Slot N" badge.
+        int bslot = -1;
+        for (int k = 0; k < BT_MAX_SLOTS; k++) {
+            BtStatus st;
+            bt_get_status((uint8_t) k, &st);
+            if (st.connected && memcmp(st.addr, list[i], BT_ADDR_LEN) == 0) {
+                bslot = k;
+                break;
+            }
+        }
+        w += snprintf(out + w, cap - w, "%s{\"addr\":\"%s\",\"slot\":%d,\"name\":",
+                      i ? "," : "", hex, bslot);
         if (w < (int) cap) w += json_str(out + w, cap - w, nm);
         if (w < (int) cap) w += snprintf(out + w, cap - w, "}");
     }

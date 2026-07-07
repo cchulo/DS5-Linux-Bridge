@@ -23,7 +23,7 @@ static const char WEB_PAGE_RESPONSE[] =
 <title>DS5-Linux-Bridge</title>
 <style>
 :root{color-scheme:dark}
-body{font-family:system-ui,sans-serif;background:#111;color:#eee;max-width:560px;margin:2rem auto;padding:0 1rem}
+body{font-family:system-ui,sans-serif;background:#111;color:#eee;max-width:740px;margin:2rem auto;padding:0 1rem}
 h1{font-size:1.4rem}h1 small{color:#888;font-weight:normal;font-size:.7em}
 .field{margin:1.1rem 0}
 label.lbl{display:block;margin-bottom:.3rem;font-size:.95rem}
@@ -64,9 +64,14 @@ select.mv{width:auto;font-size:.72rem;padding:.1rem .3rem;background:#252525;bor
 #led_dbg button{margin-top:0;padding:.4rem .9rem;font-size:.85rem;background:#3a3a3a}
 .ledrow{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-top:.6rem}
 .ledrow .ledlbl{color:#888;font-size:.85rem;min-width:6.5rem}
-details.drawer{border:1px solid #333;border-radius:8px;margin:1rem 0;padding:0 1rem .4rem;background:#151515}
-details.drawer>summary{cursor:pointer;padding:.8rem 0;font-weight:600;color:#eee;user-select:none}
-details.drawer[open]>summary{border-bottom:1px solid #2a2a2a}
+#layout{display:flex;gap:1rem;align-items:flex-start;margin-top:1rem}
+#nav{flex:0 0 8.7rem;display:flex;flex-direction:column;gap:.35rem;position:sticky;top:1rem}
+#nav button{background:#1a1a1a;border:1px solid #333;color:#bbb;text-align:left;padding:.55rem .8rem;border-radius:6px;margin:0;font-size:.9rem;cursor:pointer}
+#nav button.act{background:#2563eb;border-color:#2563eb;color:#fff}
+#content{flex:1;min-width:0;border:1px solid #333;border-radius:8px;background:#151515;padding:.2rem 1rem .6rem}
+.pane{display:none}
+.pane.act{display:block}
+@media (max-width:600px){#layout{flex-direction:column}#nav{position:static;flex-direction:row;flex-wrap:wrap;flex-basis:auto;width:100%}}
 .batt{display:inline-flex;align-items:center;gap:.35rem}
 .batt .bar{width:34px;height:14px;border:1px solid #888;border-radius:2px;position:relative;padding:1px}
 .batt .bar::after{content:"";position:absolute;right:-3px;top:4px;width:2px;height:6px;background:#888}
@@ -83,8 +88,16 @@ footer .kofi:hover{text-decoration:none;opacity:.9}
 
 <div id="statuscard"><div class="slotrow"><span class="dot"></span><span class="s">Checking…</span></div></div>
 
-<details class="drawer" open>
-<summary>Controller</summary>
+<div id="layout">
+<nav id="nav">
+  <button data-pane="controller" class="act">Controller</button>
+  <button data-pane="paired">Paired controllers</button>
+  <button data-pane="lights">Lights</button>
+  <button data-pane="network">Network</button>
+</nav>
+<div id="content">
+
+<section class="pane act" id="pane_controller">
 
 <div class="field">
   <label class="lbl">Controller mode</label>
@@ -123,10 +136,9 @@ footer .kofi:hover{text-decoration:none;opacity:.9}
   <label for="disable_inactive_disconnect">Never auto-disconnect on inactivity</label>
 </div>
 
-</details>
+</section>
 
-<details class="drawer">
-<summary>Lights</summary>
+<section class="pane" id="pane_lights">
 
 <div class="field">
   <label class="lbl">Slot colors</label>
@@ -164,10 +176,9 @@ footer .kofi:hover{text-decoration:none;opacity:.9}
 </div>
 </div>
 
-</details>
+</section>
 
-<details class="drawer">
-<summary>Network</summary>
+<section class="pane" id="pane_network">
 
 <div class="field">
   <label class="lbl">Config page address</label>
@@ -193,22 +204,14 @@ footer .kofi:hover{text-decoration:none;opacity:.9}
   </div>
 </div>
 
-</details>
+</section>
 
-<div>
-  <button id="save">Save</button>
-  <button id="factoryreset" class="fg">Factory reset</button>
-  <span id="status"></span>
-</div>
-<div class="hint">Factory reset restores all settings above to defaults. Paired
-  controllers are kept (use <b>Forget all</b> below to remove those).</div>
-
-<details class="drawer" id="bonds_drawer">
-<summary>Paired controllers</summary>
-<div class="hint">Controllers the adapter remembers. The adapter holds up to
-  <span id="bond_max">4</span>. Once a controller is paired the adapter stops
-  looking for new ones (a remembered controller reconnects on its own) &mdash;
-  use <b>Pair new controller</b> to add another, or forget one to free a slot.</div>
+<section class="pane" id="pane_paired">
+<div class="hint" style="margin-top:1rem">Controllers the adapter remembers. The
+  adapter holds up to <span id="bond_max">4</span>. Once a controller is paired
+  the adapter stops looking for new ones (a remembered controller reconnects on
+  its own) &mdash; use <b>Pair new controller</b> to add another, or forget one
+  to free a slot.</div>
 <div id="bonds"></div>
 <div id="bonds_empty" style="display:none">No paired controllers stored.</div>
 <div class="btns">
@@ -216,7 +219,18 @@ footer .kofi:hover{text-decoration:none;opacity:.9}
   <button id="forgetall" class="fg">Forget all</button>
   <span id="bstatus"></span>
 </div>
-</details>
+</section>
+
+</div>
+</div>
+
+<div>
+  <button id="save">Save</button>
+  <button id="factoryreset" class="fg">Factory reset</button>
+  <span id="status"></span>
+</div>
+<div class="hint">Factory reset restores all settings to defaults. Paired
+  controllers are kept (use <b>Forget all</b> to remove those).</div>
 
 <script>
 const $=id=>document.getElementById(id);
@@ -326,20 +340,25 @@ async function loadBonds(){
     const bonds=d.bonds||[];
     $('bonds_empty').style.display=bonds.length?'none':'block';
     bonds.forEach(b=>{
-      const connected=d.connected&&d.connected===b.addr;
       const row=document.createElement('div');row.className='bond';
       const nm=document.createElement('input');
-      nm.className='nm';nm.maxLength=15;nm.value=b.name;
-      nm.placeholder=connected?'(connected)':'unnamed';
+      nm.className='nm';nm.maxLength=15;
+      nm.value=b.name||'DualSense'; // default name; rename to tell pads apart
       const meta=document.createElement('span');meta.className='addr';
       meta.textContent=fmtAddr(b.addr);
-      const dot=document.createElement('span');dot.className='dot';
-      dot.textContent=connected?'● connected':'';
+      row.append(nm,meta);
+      if(b.slot>=0){
+        const sc=document.createElement('span');sc.className='chip';
+        sc.textContent='Slot '+(b.slot+1);
+        const col=(slotColors&&slotColors[b.slot])?'#'+slotColors[b.slot]:SLOT_COLORS[b.slot%4];
+        sc.style.color=col;sc.style.borderColor=col;
+        row.append(sc);
+      }
       const ren=document.createElement('button');ren.textContent='Rename';
       ren.onclick=()=>renameBond(b.addr,nm.value);
       const fg=document.createElement('button');fg.className='fg';fg.textContent='Forget';
       fg.onclick=()=>forgetBond(b.addr,nm.value||fmtAddr(b.addr));
-      row.append(nm,meta,dot,ren,fg);
+      row.append(ren,fg);
       box.appendChild(row);
     });
     bstatus('');
@@ -490,7 +509,17 @@ $('led_normal').onclick=()=>postLed('action=clear');
 
 // Re-fetch the bond list whenever the drawer is opened, so it can never
 // stay stale from a fetch that ran before the BT stack was up.
-$('bonds_drawer').addEventListener('toggle',()=>{if($('bonds_drawer').open)loadBonds()});
+// ----- Category navigation (sidebar) -----
+document.querySelectorAll('#nav button').forEach(b=>{
+  b.onclick=()=>{
+    document.querySelectorAll('#nav button').forEach(x=>x.classList.remove('act'));
+    b.classList.add('act');
+    document.querySelectorAll('.pane').forEach(p=>p.classList.remove('act'));
+    $('pane_'+b.dataset.pane).classList.add('act');
+    // The bond list can go stale while hidden; refresh on entry.
+    if(b.dataset.pane==='paired')loadBonds();
+  };
+});
 
 load();
 loadBonds();
