@@ -37,6 +37,15 @@ config page, and OS-specific behavior and troubleshooting.
 - **Per-slot player LEDs and lightbar colors** — pads show their seat number
   on the white player LEDs, and each slot's color (lightbar and status LED)
   is configurable in the UI. Default is blue (`#0000FF`) for every slot.
+- **Player-LED lock** (toggle in the UI, on by default) — with 2+ pads
+  connected, host writes to the player indicators are ignored so each pad
+  keeps showing its slot number even when Steam Input glitchily clears them.
+  With a single pad the host stays in control.
+- **Black lightbar writes revert to the slot color** — a host writing pure
+  black (0,0,0) would erase the seat identity; the firmware substitutes the
+  slot's configured color instead. Tip: set Steam's controller LED brightness
+  to 0% and Steam stops overriding slot colors entirely, while games keep
+  full lightbar control.
 - **Controller shortcut** — hold **PS + Triangle** for about a second to power
   off that pad (it stays paired and reconnects on the next PS press).
 
@@ -61,10 +70,38 @@ config page, and OS-specific behavior and troubleshooting.
 - Live **status card**: per-slot connection state, model, battery percentage
   (colored at the same 40%/20% thresholds as the strip), and which features
   are active on each pad at the current tier.
-- Settings organized into collapsible sections: Controller, Lights, Network,
-  and Paired controllers.
-- The paired-controller list now loads reliably even when the page is opened
-  before the Bluetooth stack has finished starting.
+- **Sidebar navigation** — categories (Controller, Paired controllers,
+  Lights, Network) down the left, one pane at a time, so the page stays
+  readable as features grow.
+- **Paired controllers**: connected pads show a colored **Slot N** badge,
+  unnamed pads display as "DualSense" (rename to tell them apart), the list
+  refreshes automatically on connect/disconnect, and a Refresh button covers
+  the rest.
+- **`/api/log`** — the firmware mirrors all of its diagnostics into a RAM
+  buffer served as plain text (first KB of boot output kept forever, plus a
+  rolling tail), so logs are readable in a browser with no UART adapter.
+
+### Reliability & memory (fixes beyond upstream)
+
+- **Bonds now survive reflashes** — BTstack's link-key flash bank is
+  relocated off the sector the RP2350 bootrom erases on every UF2 flash
+  (the same quirk that used to reset the config).
+- **Safe flash writes** — all key-store flash operations run through a
+  bounded, watchdog-fed, retrying path (and complete directly during
+  single-core boot). The stock path could hang the main loop into a
+  watchdog reboot whenever the audio core slept through the flash lockout —
+  the cause of a long-standing "dongle reboots when a controller connects".
+- **Deferred flash flushes during connection setup** — a flash erase
+  mid-handshake stalled the feature exchange and dropped the first pairing;
+  flushes now wait until no connection setup is in flight.
+- **Multi-pad teardown fixed** — "Forget all" disconnects every pad
+  (disconnects are queued through BTstack instead of racing its single
+  HCI command buffer).
+- **Memory headroom** — the heap runs ~17 KB clear of the Opus audio
+  codec's ~76 KB footprint: libopus string literals (~11 KB of never-hot
+  error text) stay in flash instead of joining the RAM-relocated code and
+  tables, and internal buffers are right-sized. Boot prints heap telemetry
+  (`[MEM]`, `[Audio] heap used`) into `/api/log` so regressions are visible.
 
 ### Build system
 
