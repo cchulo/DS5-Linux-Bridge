@@ -43,8 +43,10 @@ constexpr uint8_t RED[3]    = {255, 0, 0};
 constexpr uint32_t BLINK_YELLOW_MS = 1000;
 constexpr uint32_t BLINK_RED_MS    = 400;
 
-constexpr uint8_t LOW_BATT_YELLOW_PCT = 20;
-constexpr uint8_t LOW_BATT_RED_PCT    = 10;
+// Deliberately early warnings: charging only from 10% is hard on the cell,
+// so nudge at 40% and insist at 20%.
+constexpr uint8_t LOW_BATT_YELLOW_PCT = 40;
+constexpr uint8_t LOW_BATT_RED_PCT    = 20;
 
 PIO      led_pio;
 uint     led_sm;

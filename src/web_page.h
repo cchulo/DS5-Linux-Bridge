@@ -55,6 +55,7 @@ h2{font-size:1.1rem;margin-bottom:.3rem}
 .slotrow .s b{color:#fff}
 .slotrow.off .s{color:#777}
 .slotrow .lowb{color:#f87171}
+.slotrow .warnb{color:#facc15}
 .chip{font-size:.72rem;color:#9ca3af;background:#252525;border:1px solid #3a3a3a;border-radius:999px;padding:.1rem .5rem;white-space:nowrap}
 .chip.aud{color:#93c5fd;border-color:#1e3a8a}
 select.mv{width:auto;font-size:.72rem;padding:.1rem .3rem;background:#252525;border:1px solid #3a3a3a;color:#9ca3af;border-radius:6px}
@@ -390,7 +391,9 @@ function slotRow(d,s){
   txt.textContent=pre+model+(s.name?' “'+s.name+'”':'');
   if(s.battery_valid){
     const b=document.createElement('span');
-    b.className='s'+((s.battery_pct<=20&&!s.charging)?' lowb':'');
+    // Same thresholds as the strip LEDs: <=20% critical (red), <=40% low (yellow).
+    const warn=s.charging?'':(s.battery_pct<=20?' lowb':(s.battery_pct<=40?' warnb':''));
+    b.className='s'+warn;
     b.textContent=s.battery_pct+'%'+(s.charging?' charging':'');
     row.append(b);
   }

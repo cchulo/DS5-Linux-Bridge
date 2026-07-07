@@ -7,8 +7,8 @@
 //   off             = no controller connected
 //   solid slot color= connected (config slot_rgb; default blue #0000FF,
 //                     always matches the pad's lightbar)
-//   blinking yellow = battery <= 20% (discharging)
-//   blinking red    = battery <= 10% (discharging; faster blink)
+//   blinking yellow = battery <= 40% (discharging)
+//   blinking red    = battery <= 20% (discharging; faster blink)
 // Global brightness is capped at 5%.
 //
 // Rendered from the main loop at ~30 Hz via a PIO state machine (claimed
@@ -43,8 +43,8 @@ void ledstrip_debug_chase(uint8_t r, uint8_t g, uint8_t b);
 
 // Per-slot battery-state simulation, overlaid on the LIVE status display
 // (other slots keep showing their real state). level: 0 = back to live,
-// 1 = low (yellow blink, as at <=20%), 2 = critical (red blink, as at
-// <=10%). slot < 0 applies the level to every slot. Same 60 s auto-revert
+// 1 = low (yellow blink, as at <=40%), 2 = critical (red blink, as at
+// <=20%). slot < 0 applies the level to every slot. Same 60 s auto-revert
 // as the other debug modes; ledstrip_debug_clear() also clears it.
 void ledstrip_debug_slot_sim(int slot, int level);
 
