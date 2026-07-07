@@ -43,13 +43,13 @@ endif ()
 
 # --- Phase 2/3 hardware options: declared for pin-map stability, not yet
 # implemented. All default OFF; enabling one before its phase lands only
-# reserves the GPIO. See PLAN GPIO map (GP2 strip / GP3 power / GP4 matrix).
+# reserves the GPIO. See PLAN GPIO map (GP2 strip / GP3 power).
 option(ENABLE_POWER_PIN "Pulse a GPIO (optocoupler to PWR_SW header) as wake fallback" OFF)
 set(POWER_PIN_GPIO 3 CACHE STRING "GPIO for the power-button pulse")
-option(ENABLE_LED_STRIP "WS2812 slot/ambient LED strip via PIO" OFF)
+# Strip is capped at 4 WS2812 LEDs: one per controller slot (project descope
+# 2026-07-06 -- no ambient bar, and the LED matrix was dropped entirely).
+option(ENABLE_LED_STRIP "WS2812 per-slot status LEDs (max 4) via PIO" OFF)
 set(LED_STRIP_GPIO 2 CACHE STRING "GPIO for LED strip data")
-option(ENABLE_LED_MATRIX "8x8 WS2812B info matrix via PIO" OFF)
-set(LED_MATRIX_GPIO 4 CACHE STRING "GPIO for LED matrix data")
 
 if (PICO_W_BUILD AND WAVESHARE_RP2350B_PLUS_W_BUILD)
         message(FATAL_ERROR "PICO_W_BUILD and WAVESHARE_RP2350B_PLUS_W_BUILD are mutually exclusive")
