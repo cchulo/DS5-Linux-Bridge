@@ -26,6 +26,9 @@
 // mark it dirty (defined in main.cpp). Called on BT disconnect so a pad that
 // drops mid-press doesn't leave its buttons frozen "held" on the host.
 void bridge_reset_slot_input(uint8_t slot);
+// Swap two slots' input buffers + dirty flags (defined in main.cpp). Part of
+// bt_slot_swap: inputs follow the pad to its new seat.
+void bridge_swap_slot_input(uint8_t a, uint8_t b);
 #endif
 
 #endif // DS5_BRIDGE_SLOTS_H

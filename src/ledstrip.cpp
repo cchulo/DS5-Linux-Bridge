@@ -51,6 +51,15 @@ bool     led_ready = false;
 uint64_t next_frame_us = 0;
 uint8_t  gamma_lut[256];
 
+// Debug override (see ledstrip.h). dbg_chase < 0 means static pixel values.
+constexpr uint64_t DEBUG_TIMEOUT_US  = 60'000'000;
+constexpr uint32_t DEBUG_CHASE_MS    = 150; // per-pixel dwell
+bool     dbg_active = false;
+uint64_t dbg_until_us = 0;
+int      dbg_chase = -1;
+uint8_t  dbg_chase_rgb[3];
+uint8_t  dbg_px[PIXEL_COUNT][3];
+
 // Gamma-correct then apply the global cap.
 inline uint8_t shape(uint8_t v) {
     return (uint8_t) ((uint16_t) gamma_lut[v] * BRIGHTNESS_CAP / 255);
@@ -79,6 +88,41 @@ void ledstrip_init() {
            PIXEL_COUNT, BT_MAX_SLOTS, LED_STRIP_GPIO, pio_get_index(led_pio), led_sm);
 }
 
+void ledstrip_debug_set_pixel(int pixel, uint8_t r, uint8_t g, uint8_t b) {
+    if (!led_ready) return;
+    if (!dbg_active || dbg_chase >= 0) {
+        // Entering static debug mode: start from an all-dark canvas.
+        for (auto &px : dbg_px) px[0] = px[1] = px[2] = 0;
+    }
+    dbg_chase = -1;
+    if (pixel < 0) {
+        for (auto &px : dbg_px) { px[0] = r; px[1] = g; px[2] = b; }
+    } else if (pixel < PIXEL_COUNT) {
+        dbg_px[pixel][0] = r;
+        dbg_px[pixel][1] = g;
+        dbg_px[pixel][2] = b;
+    }
+    dbg_active = true;
+    dbg_until_us = time_us_64() + DEBUG_TIMEOUT_US;
+    printf("[LED] debug set pixel %d = %u,%u,%u\n", pixel, r, g, b);
+}
+
+void ledstrip_debug_chase(uint8_t r, uint8_t g, uint8_t b) {
+    if (!led_ready) return;
+    dbg_chase = 1;
+    dbg_chase_rgb[0] = r;
+    dbg_chase_rgb[1] = g;
+    dbg_chase_rgb[2] = b;
+    dbg_active = true;
+    dbg_until_us = time_us_64() + DEBUG_TIMEOUT_US;
+    printf("[LED] debug chase %u,%u,%u\n", r, g, b);
+}
+
+void ledstrip_debug_clear() {
+    dbg_active = false;
+    printf("[LED] debug cleared\n");
+}
+
 void ledstrip_tick() {
     if (!led_ready) return;
     const uint64_t now = time_us_64();
@@ -88,6 +132,32 @@ void ledstrip_tick() {
     const uint32_t ms = (uint32_t) (now / 1000);
 
     uint8_t frame[PIXEL_COUNT][3] = {}; // all dark, spacers stay that way
+
+    if (dbg_active && now >= dbg_until_us) {
+        dbg_active = false; // debug timed out; fall through to normal
+        printf("[LED] debug timed out, back to normal\n");
+    }
+    if (dbg_active) {
+        if (dbg_chase >= 0) {
+            const int lit = (int) ((ms / DEBUG_CHASE_MS) % PIXEL_COUNT);
+            frame[lit][0] = dbg_chase_rgb[0];
+            frame[lit][1] = dbg_chase_rgb[1];
+            frame[lit][2] = dbg_chase_rgb[2];
+        } else {
+            for (int i = 0; i < PIXEL_COUNT; i++) {
+                frame[i][0] = dbg_px[i][0];
+                frame[i][1] = dbg_px[i][1];
+                frame[i][2] = dbg_px[i][2];
+            }
+        }
+        for (int i = 0; i < PIXEL_COUNT; i++) {
+            const uint32_t grb = ((uint32_t) shape(frame[i][1]) << 16) |
+                                 ((uint32_t) shape(frame[i][0]) << 8) |
+                                 (uint32_t) shape(frame[i][2]);
+            pio_sm_put_blocking(led_pio, led_sm, grb << 8u);
+        }
+        return;
+    }
 
     for (uint8_t slot = 0; slot < BT_MAX_SLOTS; slot++) {
         BtStatus st;

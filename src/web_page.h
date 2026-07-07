@@ -57,6 +57,10 @@ h2{font-size:1.1rem;margin-bottom:.3rem}
 .slotrow .lowb{color:#f87171}
 .chip{font-size:.72rem;color:#9ca3af;background:#252525;border:1px solid #3a3a3a;border-radius:999px;padding:.1rem .5rem;white-space:nowrap}
 .chip.aud{color:#93c5fd;border-color:#1e3a8a}
+select.mv{width:auto;font-size:.72rem;padding:.1rem .3rem;background:#252525;border:1px solid #3a3a3a;color:#9ca3af;border-radius:6px}
+#led_dbg input[type=color]{width:3rem;height:2.1rem;padding:0;border:1px solid #444;background:#222;border-radius:4px}
+#led_dbg select{width:auto}
+#led_dbg button{margin-top:0}
 .batt{display:inline-flex;align-items:center;gap:.35rem}
 .batt .bar{width:34px;height:14px;border:1px solid #888;border-radius:2px;position:relative;padding:1px}
 .batt .bar::after{content:"";position:absolute;right:-3px;top:4px;width:2px;height:6px;background:#888}
@@ -160,6 +164,22 @@ footer .kofi:hover{text-decoration:none;opacity:.9}
   <button id="pair">Pair new controller</button>
   <button id="forgetall" class="fg">Forget all</button>
   <span id="bstatus"></span>
+</div>
+
+<div id="led_dbg" style="display:none">
+<hr>
+<h2>LED debug</h2>
+<div class="hint">Drives the WS2812B chain directly (still brightness-capped).
+Reverts to normal status display automatically after 60&nbsp;s.</div>
+<div class="btns" style="flex-wrap:wrap;margin-top:.6rem">
+  <input type="color" id="led_color" value="#00ff00">
+  <select id="led_pixel"><option value="all">all pixels</option></select>
+  <button id="led_set">Set</button>
+  <button id="led_chase">Chase</button>
+  <button id="led_off">All off</button>
+  <button id="led_normal">Normal</button>
+  <span id="lstatus"></span>
+</div>
 </div>
 
 <script>
@@ -319,7 +339,32 @@ function slotRow(d,s){
   if(d.audio_allowed&&s.slot===d.audio_slot){
     row.append(chip('🔊 audio','aud'),chip('📳 HD haptics','aud'),chip('🎤 mic','aud'));
   }
+  if(d.max>1){
+    const mv=document.createElement('select');mv.className='mv';
+    const ph=document.createElement('option');ph.value='';ph.textContent='⇄ move';
+    mv.appendChild(ph);
+    for(let i=0;i<d.max;i++){
+      if(i===s.slot)continue;
+      const o=document.createElement('option');o.value=i;
+      o.textContent='to slot '+(i+1);
+      mv.appendChild(o);
+    }
+    mv.onchange=async()=>{
+      if(mv.value==='')return;
+      const ok=await postSlots('action=swap&a='+s.slot+'&b='+mv.value);
+      if(!ok)alert('move failed (slot busy?)');
+      loadStatus();
+    };
+    row.append(mv);
+  }
   return row;
+}
+
+async function postSlots(body){
+  try{
+    const r=await fetch('/api/slots',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});
+    return r.ok;
+  }catch(e){return false}
 }
 async function loadStatus(){
   try{
@@ -328,6 +373,17 @@ async function loadStatus(){
     const card=$('statuscard');card.innerHTML='';
     card.className=d.connected>0?'on':'';
     (d.slots||[]).forEach(s=>card.appendChild(slotRow(d,s)));
+    if(d.led){
+      $('led_dbg').style.display='';
+      const sel=$('led_pixel');
+      if(sel.options.length===1){
+        for(let i=0;i<d.max*2;i++){
+          const o=document.createElement('option');o.value=i;
+          o.textContent='pixel '+(i+1);
+          sel.appendChild(o);
+        }
+      }
+    }
   }catch(e){
     const card=$('statuscard');card.innerHTML='';
     const row=document.createElement('div');row.className='slotrow off';
@@ -335,6 +391,19 @@ async function loadStatus(){
     row.append(t);card.appendChild(row);
   }
 }
+
+// ----- LED debug (POST /api/led) -----
+async function postLed(body){
+  const st=$('lstatus');st.className='dirty';st.textContent='…';
+  try{
+    const r=await fetch('/api/led',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});
+    st.className=r.ok?'ok':'err';st.textContent=r.ok?'✓':'failed';
+  }catch(e){st.className='err';st.textContent='failed'}
+}
+$('led_set').onclick=()=>postLed('action=set&rgb='+$('led_color').value.slice(1)+'&pixel='+$('led_pixel').value);
+$('led_chase').onclick=()=>postLed('action=chase&rgb='+$('led_color').value.slice(1));
+$('led_off').onclick=()=>postLed('action=set&rgb=000000&pixel=all');
+$('led_normal').onclick=()=>postLed('action=clear');
 
 load();
 loadBonds();

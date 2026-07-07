@@ -124,6 +124,18 @@ void bridge_reset_slot_input(uint8_t slot) {
   critical_section_exit(&report_cs);
 }
 
+void bridge_swap_slot_input(uint8_t a, uint8_t b) {
+  if (a >= BT_MAX_SLOTS || b >= BT_MAX_SLOTS || a == b) return;
+  uint8_t tmp[63];
+  critical_section_enter_blocking(&report_cs);
+  memcpy(tmp, interrupt_in_data[a], 63);
+  memcpy(interrupt_in_data[a], interrupt_in_data[b], 63);
+  memcpy(interrupt_in_data[b], tmp, 63);
+  report_dirty[a] = true;
+  report_dirty[b] = true;
+  critical_section_exit(&report_cs);
+}
+
 // Push one slot's cached output state to its controller as a BT 0x31 report.
 static void state_push_slot_to_bt(uint8_t slot) {
   uint8_t outputData[78]{};

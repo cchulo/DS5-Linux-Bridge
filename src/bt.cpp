@@ -4,6 +4,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <utility>
 #include "bt.h"
 #include "usb.h"
 #include <queue>
@@ -46,6 +47,7 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
 
 struct bt_slot;
 static void bt_feature_snapshot_maybe_capture(bt_slot *s);
+static void bt_send_full_state(uint8_t slot);
 
 static btstack_packet_callback_registration_t hci_event_callback_registration, l2cap_event_callback_registration;
 
@@ -137,6 +139,58 @@ int bt_connected_count() {
     return BT_MAX_SLOTS - bt_free_slot_count();
 }
 
+bool bt_slot_swap(uint8_t a, uint8_t b) {
+    if (a >= BT_MAX_SLOTS || b >= BT_MAX_SLOTS || a == b) return false;
+    bt_slot &x = slots[a];
+    bt_slot &y = slots[b];
+    // Refuse while either seat is mid-setup: HCI events between accept and
+    // HID-open would land on a half-swapped slot.
+    if (x.connect_attempt_started != 0 || y.connect_attempt_started != 0) return false;
+    if (x.acl_handle == HCI_CON_HANDLE_INVALID &&
+        y.acl_handle == HCI_CON_HANDLE_INVALID) {
+        return true; // both empty: nothing to move
+    }
+    printf("[BT] Swap slots %u <-> %u\n", a, b);
+    // Event routing is lookup-based (handle/CID -> slot scan), so swapping
+    // the per-pad state is all it takes; in-flight retries, send chains and
+    // inactivity stamps travel with their connection.
+    std::swap(x.acl_handle, y.acl_handle);
+    {
+        bd_addr_t t;
+        bd_addr_copy(t, x.addr);
+        bd_addr_copy(x.addr, y.addr);
+        bd_addr_copy(y.addr, t);
+    }
+    std::swap(x.control_cid, y.control_cid);
+    std::swap(x.interrupt_cid, y.interrupt_cid);
+    std::swap(x.new_pair, y.new_pair);
+    std::swap(x.check_dse, y.check_dse);
+    std::swap(x.is_dse, y.is_dse);
+    std::swap(x.inactive_time, y.inactive_time);
+    std::swap(x.rssi, y.rssi);
+    x.feature_data.swap(y.feature_data);
+    std::swap(x.send_fifo, y.send_fifo);
+    {
+        const bool t = x.send_chain_active;
+        x.send_chain_active = y.send_chain_active;
+        y.send_chain_active = t;
+    }
+    std::swap(x.retry_packet, y.retry_packet);
+    std::swap(x.retry_pending, y.retry_pending);
+    // Inputs follow the pad; output state stays with the seat (it belongs to
+    // the host-facing interface).
+    bridge_swap_slot_input(a, b);
+    // The composite's DS/DSE identity follows the USB-exposed slot's model.
+    if (slots[BT_USB_SLOT].acl_handle != HCI_CON_HANDLE_INVALID) {
+        is_dse = slots[BT_USB_SLOT].is_dse;
+    }
+    // Each seat pushes its state to whichever pad now sits there, so
+    // lightbars and player LEDs update immediately.
+    bt_send_full_state(a);
+    bt_send_full_state(b);
+    return true;
+}
+
 int bt_lowest_connected_slot() {
     for (auto &s : slots) {
         if (s.acl_handle != HCI_CON_HANDLE_INVALID) return slot_index(&s);
@@ -153,6 +207,21 @@ static bt_slot *slot_alloc(const bd_addr_t addr) {
         if (s.acl_handle == HCI_CON_HANDLE_INVALID) return &s;
     }
     return nullptr;
+}
+
+// Push a slot's full cached output state (report 0x32: lightbar, player
+// LEDs, rumble/FFB) to whichever pad sits there. Used at connect and after a
+// slot swap.
+static void bt_send_full_state(uint8_t slot) {
+    if (slot >= BT_MAX_SLOTS) return;
+    if (slots[slot].interrupt_cid == 0) return;
+    uint8_t report32[142]{};
+    report32[0] = 0x32;
+    report32[1] = 0x10; // reportSeqCounter
+    report32[2] = 0x10 | 0 << 6 | 1 << 7;
+    report32[3] = 0x3f; // 63 bytes
+    state_get(slot, report32 + 4, sizeof(SetStateData));
+    bt_write(slot, report32, sizeof(report32));
 }
 
 // Reset a slot's connection state (does not touch the send FIFO's queue_t
@@ -1076,13 +1145,7 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                     init_feature((uint8_t) slot_index(s));
                     // 初始化手柄状态 (per-slot state carries the slot's lightbar
                     // color and player indicators on multi-slot builds)
-                    uint8_t report32[142]{};
-                    report32[0] = 0x32;
-                    report32[1] = 0x10; // reportSeqCounter
-                    report32[2] = 0x10 | 0 << 6 | 1 << 7;
-                    report32[3] = 0x3f; // 63 bytes
-                    state_get((uint8_t) slot_index(s), report32 + 4, sizeof(SetStateData));
-                    bt_write((uint8_t) slot_index(s), report32, sizeof(report32));
+                    bt_send_full_state((uint8_t) slot_index(s));
 
                     const auto mtu = l2cap_get_remote_mtu_for_local_cid(s->interrupt_cid);
                     printf("[L2CAP] Remote Interrupt MTU: %d\n", mtu);

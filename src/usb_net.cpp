@@ -38,6 +38,9 @@
 
 #include "bt.h"
 #include "tier.h"
+#ifdef ENABLE_LED_STRIP
+#include "ledstrip.h"
+#endif
 #include "config.h"
 #include "web_page.h"
 
@@ -358,10 +361,15 @@ static int json_status(char *out, size_t cap) {
 // tier state (see tier.h). Additive endpoint: /api/status keeps its original
 // single-controller shape for existing clients (Decky plugin).
 static int json_slots(char *out, size_t cap) {
+#ifdef ENABLE_LED_STRIP
+    const char *led_flag = "true";
+#else
+    const char *led_flag = "false";
+#endif
     int w = snprintf(out, cap,
-                     "{\"max\":%u,\"connected\":%d,\"audio_slot\":%u,\"audio_allowed\":%s,\"slots\":[",
+                     "{\"max\":%u,\"connected\":%d,\"audio_slot\":%u,\"audio_allowed\":%s,\"led\":%s,\"slots\":[",
                      BT_MAX_SLOTS, bt_connected_count(), tier_audio_slot(),
-                     tier_audio_allowed() ? "true" : "false");
+                     tier_audio_allowed() ? "true" : "false", led_flag);
     for (int i = 0; i < BT_MAX_SLOTS && w < (int) cap; i++) {
         BtStatus s;
         bt_get_status((uint8_t) i, &s);
@@ -420,6 +428,12 @@ extern "C" int fs_open_custom(struct fs_file *file, const char *name) {
     // POST /api/config redirects here when config_save() failed to reach flash.
     // Returning a non-2xx status makes the page's `r.ok` check false so it shows
     // an error instead of "Saved ✓" for a change that never persisted.
+    // POST /api/slots or /api/led redirects here when the action was refused
+    // (bad indices, slot mid-setup, LED debug on a build without the strip).
+    if (strcmp(name, "/api/action-failed") == 0) {
+        static const char af[] = "action failed";
+        return make_file(file, "409 Conflict", "text/plain", af, sizeof(af) - 1);
+    }
     // POST /api/bonds action=pair redirects here when the pairing request was
     // refused (all bond seats occupied, or all slots connected on a multi-slot
     // build). Non-2xx so the page can show a specific message.
@@ -466,8 +480,10 @@ extern "C" int fs_read_custom(struct fs_file *file, char *buffer, int count) {
 static char post_buf[POST_BUFSIZE];
 static u16_t post_pos;
 static void *post_conn;
-static bool post_is_bonds; // which endpoint the in-flight POST targets
+enum post_target_t { POST_CONFIG, POST_BONDS, POST_SLOTS, POST_LED };
+static post_target_t post_target; // which endpoint the in-flight POST targets
 static bool last_save_ok = true; // result of the most recent config_save()
+static bool last_action_ok = true; // result of the most recent slots/led action
 static bool last_pair_rejected = false; // pair action refused (no free bond/slot)
 
 static int clampi(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
@@ -623,6 +639,63 @@ static void apply_bonds_post(char *body) {
     }
 }
 
+// POST /api/slots -- form fields: action=swap&a=<slot>&b=<slot>. Moves a
+// controller between seats (bt_slot_swap); moving to an empty seat is fine.
+static void apply_slots_post(char *body) {
+    char action[16] = "";
+    int a = -1, b = -1;
+    for (char *tok = strtok(body, "&"); tok; tok = strtok(nullptr, "&")) {
+        char *eq = strchr(tok, '=');
+        if (!eq) continue;
+        *eq++ = 0;
+        if (strcmp(tok, "action") == 0) strncpy(action, eq, sizeof(action) - 1);
+        else if (strcmp(tok, "a") == 0) a = atoi(eq);
+        else if (strcmp(tok, "b") == 0) b = atoi(eq);
+    }
+    last_action_ok = false;
+    if (strcmp(action, "swap") == 0 && a >= 0 && b >= 0) {
+        last_action_ok = bt_slot_swap((uint8_t) a, (uint8_t) b);
+    }
+    printf("[NET] slots %s a=%d b=%d via web UI: %s\n", action, a, b,
+           last_action_ok ? "OK" : "REJECTED");
+}
+
+// POST /api/led -- form fields: action=set|chase|clear, rgb=RRGGBB,
+// pixel=<n>|all. Drives the LED debug override (auto-reverts after 60 s).
+#ifdef ENABLE_LED_STRIP
+static void apply_led_post(char *body) {
+    char action[8] = "";
+    char rgbhex[8] = "";
+    char pixel[8] = "all";
+    for (char *tok = strtok(body, "&"); tok; tok = strtok(nullptr, "&")) {
+        char *eq = strchr(tok, '=');
+        if (!eq) continue;
+        *eq++ = 0;
+        if (strcmp(tok, "action") == 0) strncpy(action, eq, sizeof(action) - 1);
+        else if (strcmp(tok, "rgb") == 0) strncpy(rgbhex, eq, sizeof(rgbhex) - 1);
+        else if (strcmp(tok, "pixel") == 0) strncpy(pixel, eq, sizeof(pixel) - 1);
+    }
+    uint8_t r = 0, g = 0, b = 0;
+    if (strlen(rgbhex) == 6) {
+        const uint32_t v = (uint32_t) strtoul(rgbhex, nullptr, 16);
+        r = (uint8_t) (v >> 16);
+        g = (uint8_t) (v >> 8);
+        b = (uint8_t) v;
+    }
+    last_action_ok = true;
+    if (strcmp(action, "set") == 0) {
+        ledstrip_debug_set_pixel(strcmp(pixel, "all") == 0 ? -1 : atoi(pixel), r, g, b);
+    } else if (strcmp(action, "chase") == 0) {
+        ledstrip_debug_chase(r, g, b);
+    } else if (strcmp(action, "clear") == 0) {
+        ledstrip_debug_clear();
+    } else {
+        last_action_ok = false;
+    }
+    printf("[NET] led %s rgb=%s pixel=%s via web UI\n", action, rgbhex, pixel);
+}
+#endif
+
 extern "C" err_t httpd_post_begin(void *connection, const char *uri, const char *http_request,
                                   u16_t http_request_len, int content_len, char *response_uri,
                                   u16_t response_uri_len, u8_t *post_auto_wnd) {
@@ -631,13 +704,19 @@ extern "C" err_t httpd_post_begin(void *connection, const char *uri, const char 
     (void) response_uri;
     (void) response_uri_len;
     (void) post_auto_wnd;
-    const bool is_config = strcmp(uri, "/api/config") == 0;
-    const bool is_bonds  = strcmp(uri, "/api/bonds") == 0;
-    if ((!is_config && !is_bonds) || content_len >= POST_BUFSIZE) return ERR_VAL;
+    post_target_t target;
+    if (strcmp(uri, "/api/config") == 0) target = POST_CONFIG;
+    else if (strcmp(uri, "/api/bonds") == 0) target = POST_BONDS;
+    else if (strcmp(uri, "/api/slots") == 0) target = POST_SLOTS;
+#ifdef ENABLE_LED_STRIP
+    else if (strcmp(uri, "/api/led") == 0) target = POST_LED;
+#endif
+    else return ERR_VAL;
+    if (content_len >= POST_BUFSIZE) return ERR_VAL;
     if (post_conn) return ERR_USE; // one POST at a time
     post_conn = connection;
     post_pos = 0;
-    post_is_bonds = is_bonds;
+    post_target = target;
     return ERR_OK;
 }
 
@@ -655,15 +734,31 @@ extern "C" err_t httpd_post_receive_data(void *connection, struct pbuf *p) {
 extern "C" void httpd_post_finished(void *connection, char *response_uri, u16_t response_uri_len) {
     if (connection != post_conn) return;
     post_conn = nullptr;
-    if (post_is_bonds) {
-        apply_bonds_post(post_buf);
-        snprintf(response_uri, response_uri_len,
-                 last_pair_rejected ? "/api/pair-rejected"
-                 : (last_save_ok ? "/api/bonds" : "/api/save-failed"));
-    } else {
-        apply_post(post_buf);
-        snprintf(response_uri, response_uri_len,
-                 last_save_ok ? "/api/config" : "/api/save-failed");
+    switch (post_target) {
+        case POST_BONDS:
+            apply_bonds_post(post_buf);
+            snprintf(response_uri, response_uri_len,
+                     last_pair_rejected ? "/api/pair-rejected"
+                     : (last_save_ok ? "/api/bonds" : "/api/save-failed"));
+            break;
+        case POST_SLOTS:
+            apply_slots_post(post_buf);
+            snprintf(response_uri, response_uri_len,
+                     last_action_ok ? "/api/slots" : "/api/action-failed");
+            break;
+#ifdef ENABLE_LED_STRIP
+        case POST_LED:
+            apply_led_post(post_buf);
+            snprintf(response_uri, response_uri_len,
+                     last_action_ok ? "/api/slots" : "/api/action-failed");
+            break;
+#endif
+        case POST_CONFIG:
+        default:
+            apply_post(post_buf);
+            snprintf(response_uri, response_uri_len,
+                     last_save_ok ? "/api/config" : "/api/save-failed");
+            break;
     }
 }
 

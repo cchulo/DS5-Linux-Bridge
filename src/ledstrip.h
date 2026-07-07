@@ -26,4 +26,21 @@ void ledstrip_init();
 // iteration; cheap no-op between frames.
 void ledstrip_tick();
 
+// ---- Debug override (web UI "LED debug") ----
+// While active, the debug frame replaces normal rendering. Auto-reverts to
+// normal 60 s after the last debug command so a forgotten test can't stick.
+// The 10% brightness cap and gamma apply to debug output too.
+
+#include <cstdint>
+
+// Set one pixel (0-based chain position) to r/g/b; pixel < 0 sets the whole
+// chain. Enters/refreshes debug mode.
+void ledstrip_debug_set_pixel(int pixel, uint8_t r, uint8_t g, uint8_t b);
+
+// Single lit pixel walking the chain in the given color.
+void ledstrip_debug_chase(uint8_t r, uint8_t g, uint8_t b);
+
+// Leave debug mode and resume normal status rendering.
+void ledstrip_debug_clear();
+
 #endif // DS5_BRIDGE_LEDSTRIP_H

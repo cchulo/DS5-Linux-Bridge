@@ -98,6 +98,13 @@ void bt_dualsense_power_off();
 // PS press). Used by the PS+Triangle controller shortcut.
 void bt_slot_power_off(uint8_t slot);
 
+// Swap two slots (web UI "move controller"). Everything that belongs to the
+// PAD moves (BT link state, input stream, feature cache); output state stays
+// with the SEAT (the host-facing interface), so the moved pad adopts its new
+// seat's lightbar/player LEDs immediately. Returns false while either seat is
+// mid-connection-setup or on bad indices.
+bool bt_slot_swap(uint8_t a, uint8_t b);
+
 // Tick connection watchdogs (pre-ACL attempt + per-slot setup). Call from main loop.
 void bt_connection_watchdog_tick();
 
