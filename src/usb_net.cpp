@@ -241,6 +241,7 @@ static int json_config(char *out, size_t cap) {
                     "\"led_count\":%u,"
                     "\"led_max\":%u,"
                     "\"led_masks\":[\"%lX\",\"%lX\",\"%lX\",\"%lX\"],"
+                    "\"disable_player_led_lock\":%u,"
                     "\"max_slots\":%u}",
                     PICO_PROGRAM_VERSION_STRING,
                     c.inactive_time,
@@ -262,6 +263,7 @@ static int json_config(char *out, size_t cap) {
                     (unsigned long) c.slot_led_mask[1],
                     (unsigned long) c.slot_led_mask[2],
                     (unsigned long) c.slot_led_mask[3],
+                    c.disable_player_led_lock,
                     BT_MAX_SLOTS);
 }
 
@@ -587,6 +589,8 @@ static void apply_post(char *body) {
             c.controller_mode = (uint8_t) clampi(val, 0, 2);
         } else if (strcmp(tok, "webconfig_subnet") == 0) {
             c.webconfig_subnet = (uint8_t) clampi(val, 0, WEBCONFIG_SUBNET_MAX);
+        } else if (strcmp(tok, "disable_player_led_lock") == 0) {
+            c.disable_player_led_lock = val ? 1 : 0;
         } else if (strcmp(tok, "led_count") == 0) {
             c.led_count = (uint8_t) clampi(val, 1, LED_STRIP_MAX_PIXELS);
         } else if (strncmp(tok, "led_mask", 8) == 0 &&
@@ -625,10 +629,16 @@ static void apply_post(char *body) {
         }
     }
 
+    const bool lock_was_disabled = get_config().disable_player_led_lock;
     set_config(c); // validates + stores in RAM
     // Slot colors take effect immediately: re-apply to every connected pad's
     // lightbar (the strip reads the config directly each frame).
     bt_slot_colors_refresh();
+    // Enabling the player-LED lock takes effect immediately too: re-pin every
+    // connected pad's slot pattern (no-op unless 2+ pads are connected).
+    if (lock_was_disabled && !get_config().disable_player_led_lock) {
+        bt_player_led_lock_refresh();
+    }
     // The sector erase blocks with interrupts off; feed the watchdog first.
     watchdog_update();
     // config_save() can fail (core1 won't park -> flash write skipped). If it

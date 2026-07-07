@@ -154,6 +154,17 @@ footer .kofi:hover{text-decoration:none;opacity:.9}
   colors.</div>
 </div>
 
+<div class="field">
+  <div class="chk">
+    <input type="checkbox" id="player_led_lock">
+    <label for="player_led_lock">Always show the slot number on the player LEDs</label>
+  </div>
+  <div class="hint">With 2+ controllers connected, each pad's white player LEDs
+  stay pinned to its slot number even if the PC (e.g. a glitchy Steam Input)
+  tries to clear or change them. With a single controller the PC stays in
+  control as usual.</div>
+</div>
+
 <div class="field chk">
   <input type="checkbox" id="disable_pico_led">
   <label for="disable_pico_led">Disable the onboard Pico LED</label>
@@ -265,7 +276,7 @@ function bindRange(id,out){const el=$(id);const fn=()=>$(out).textContent=el.val
 const upd=[bindRange('audio_buffer_length','ab_val'),bindRange('inactive_time','it_val')];
 
 function markDirty(){$('save').disabled=false;setStatus('unsaved changes','dirty')}
-['controller_mode','polling_rate_mode','disable_inactive_disconnect','disable_pico_led','webconfig_subnet']
+['controller_mode','polling_rate_mode','disable_inactive_disconnect','disable_pico_led','player_led_lock','webconfig_subnet']
   .forEach(id=>$(id).onchange=markDirty);
 function toggleCustomIp(){$('customip_wrap').style.display=$('webconfig_subnet').value==='3'?'':'none'}
 $('webconfig_subnet').addEventListener('change',toggleCustomIp);
@@ -281,6 +292,7 @@ async function load(){
     $('inactive_time').value=c.inactive_time;
     $('disable_inactive_disconnect').checked=!!c.disable_inactive_disconnect;
     $('disable_pico_led').checked=!!c.disable_pico_led;
+    $('player_led_lock').checked=!c.disable_player_led_lock;
     $('webconfig_subnet').value=c.webconfig_subnet;
     if(c.webconfig_custom_ip&&c.webconfig_custom_ip!=='0.0.0.0')
       $('webconfig_custom_ip').value=c.webconfig_custom_ip;
@@ -318,6 +330,7 @@ async function save(){
     'inactive_time='+$('inactive_time').value,
     'disable_inactive_disconnect='+($('disable_inactive_disconnect').checked?1:0),
     'disable_pico_led='+($('disable_pico_led').checked?1:0),
+    'disable_player_led_lock='+($('player_led_lock').checked?0:1),
     'webconfig_subnet='+$('webconfig_subnet').value,
     'webconfig_custom_ip='+encodeURIComponent($('webconfig_custom_ip').value.trim())
   ];

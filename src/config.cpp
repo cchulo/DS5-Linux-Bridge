@@ -78,6 +78,7 @@ static_assert(offsetof(Config_body, audio_slot) == 104);
 static_assert(offsetof(Config_body, feature_snapshot_valid) == 105);
 static_assert(offsetof(Config_body, slot_rgb) == 261);
 static_assert(offsetof(Config_body, led_count) == 273);
+static_assert(offsetof(Config_body, disable_player_led_lock) == 291);
 static_assert(sizeof(Config_body) <= 320); // keep well inside the 512 B store
 
 // CRC over the first `len` bytes of the body. `len` is the stored size, so an
@@ -170,6 +171,10 @@ void config_valid() {
     for (int s = 0; s < 4; s++) {
       body->slot_led_mask[s] = 1u << (s * 2 + 1);
     }
+  }
+  if (body->disable_player_led_lock > 1) {
+    body->disable_player_led_lock = 0;
+    printf("[Config] disable_player_led_lock is invalid\n");
   }
   // Legacy in-body version byte, kept in sync with the header for compatibility
   // with older firmware that read it. Not authoritative; the header version is.

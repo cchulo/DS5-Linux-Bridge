@@ -94,6 +94,13 @@ struct __attribute__((packed)) Config_body {
     uint8_t  led_count;
     uint8_t  led_map_valid;
     uint32_t slot_led_mask[4];
+    // Player-LED lock (multi-slot builds). While 2+ pads are connected, host
+    // writes to the player indicators (white LEDs under the touchpad) are
+    // ignored and each pad stays pinned to its slot pattern -- Steam Input
+    // glitchily clears them, losing the seat identity. With a single pad the
+    // host stays in control (stock behavior). Stored inverted so the
+    // migrated/zero default means "lock on". Web UI toggle in Lights.
+    uint8_t disable_player_led_lock; // 0 = lock active (default), 1 = host-controlled
 };
 
 struct __attribute__((packed)) Config {

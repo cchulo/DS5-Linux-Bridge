@@ -6,6 +6,7 @@
 #include <cstring>
 
 #include "state_mgr.h"
+#include "bt.h"
 #include "config.h"
 #include "tier.h"
 #include "utils.h"
@@ -71,6 +72,25 @@ void state_set_local_mute(bool muted) {
         st[8] = 0; // MuteLight::Off
         st[9] &= ~(1 << 4); // Clear MicMute bit
     }
+}
+
+// Player-LED lock (see config.h): active only on multi-slot builds with 2+
+// pads connected, so single-pad behavior stays stock.
+static bool player_led_lock_active() {
+#if BT_MAX_SLOTS > 1
+    return !get_config().disable_player_led_lock && bt_connected_count() > 1;
+#else
+    return false;
+#endif
+}
+
+void state_force_player_leds(uint8_t slot) {
+#if BT_MAX_SLOTS > 1
+    if (slot >= BT_MAX_SLOTS) return;
+    state[slot][kPlayerIndicatorsOffset] = slot_player_leds[slot];
+#else
+    (void) slot;
+#endif
 }
 
 void state_apply_slot_color(uint8_t slot) {
@@ -258,11 +278,20 @@ void state_update(uint8_t slot, const uint8_t *data, const uint8_t size) {
         offsetof(SetStateData, LightBrightness),
         sizeof(update.LightBrightness)
     );
-    copy_if_allowed(
-        update.AllowPlayerIndicators,
-        kPlayerIndicatorsOffset,
-        sizeof(uint8_t)
-    );
+    // Player-LED lock: with 2+ pads connected the white LEDs are the slot
+    // number; Steam Input glitchily clears them, so ignore host writes and
+    // re-pin the slot pattern (this also self-heals junk a host wrote while
+    // the lock was inactive, on its next write). Single-pad behavior and the
+    // toggle-off state stay stock.
+    if (player_led_lock_active()) {
+        state_force_player_leds(slot);
+    } else {
+        copy_if_allowed(
+            update.AllowPlayerIndicators,
+            kPlayerIndicatorsOffset,
+            sizeof(uint8_t)
+        );
+    }
     bool led_copy = update.AllowLedColor;
 #if BT_MAX_SLOTS > 1
     // A pure-black host write would turn the lightbar off and erase the

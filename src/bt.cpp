@@ -235,6 +235,17 @@ void bt_slot_colors_refresh() {
     }
 }
 
+void bt_player_led_lock_refresh() {
+#if BT_MAX_SLOTS > 1
+    if (get_config().disable_player_led_lock || bt_connected_count() < 2) return;
+    for (uint8_t i = 0; i < BT_MAX_SLOTS; i++) {
+        if (slots[i].interrupt_cid == 0) continue;
+        state_force_player_leds(i);
+        bt_send_full_state(i);
+    }
+#endif
+}
+
 // Reset a slot's connection state (does not touch the send FIFO's queue_t
 // storage, which is drained instead of re-inited).
 static void slot_clear(bt_slot *s) {
@@ -1216,6 +1227,10 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                     // 初始化手柄状态 (per-slot state carries the slot's lightbar
                     // color and player indicators on multi-slot builds)
                     bt_send_full_state((uint8_t) slot_index(s));
+                    // This join may have activated the player-LED lock (2+
+                    // pads): re-pin every pad's slot pattern in case the host
+                    // cleared one while the lock was inactive.
+                    bt_player_led_lock_refresh();
 
                     const auto mtu = l2cap_get_remote_mtu_for_local_cid(s->interrupt_cid);
                     printf("[L2CAP] Remote Interrupt MTU: %d\n", mtu);

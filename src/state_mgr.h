@@ -26,6 +26,10 @@ void state_update(uint8_t slot, const uint8_t *data, uint8_t size);
 // state_slot_reset and when the user edits slot colors in the web UI.
 void state_apply_slot_color(uint8_t slot);
 
+// Pin `slot`'s cached player-indicator byte back to its slot pattern
+// (multi-slot builds; no-op otherwise). Part of the player-LED lock.
+void state_force_player_leds(uint8_t slot);
+
 // Shared global state variables for hybrid muting. Mute is an audio-path
 // concern and audio serves the BT_USB_SLOT controller only, so these stay
 // singletons scoped to that slot.

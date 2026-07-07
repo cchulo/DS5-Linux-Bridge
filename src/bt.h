@@ -110,6 +110,12 @@ bool bt_slot_swap(uint8_t a, uint8_t b);
 // edits slot colors in the web UI.
 void bt_slot_colors_refresh();
 
+// Player-LED lock: re-pin every connected pad's slot player-indicator
+// pattern and push its full state. Called when the lock may have just become
+// active (a pad joined, or the toggle was enabled in the web UI). No-op on
+// single-slot builds, with <2 pads connected, or with the lock disabled.
+void bt_player_led_lock_refresh();
+
 // Tick connection watchdogs (pre-ACL attempt + per-slot setup). Call from main loop.
 void bt_connection_watchdog_tick();
 
