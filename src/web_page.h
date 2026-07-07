@@ -211,12 +211,14 @@ footer .kofi:hover{text-decoration:none;opacity:.9}
   adapter holds up to <span id="bond_max">4</span>. Once a controller is paired
   the adapter stops looking for new ones (a remembered controller reconnects on
   its own) &mdash; use <b>Pair new controller</b> to add another, or forget one
-  to free a slot.</div>
+  to free a slot. The list updates automatically, but if it ever looks stale
+  (right after pairing or forgetting), hit <b>Refresh</b>.</div>
 <div id="bonds"></div>
 <div id="bonds_empty" style="display:none">No paired controllers stored.</div>
 <div class="btns">
   <button id="pair">Pair new controller</button>
   <button id="forgetall" class="fg">Forget all</button>
+  <button id="bonds_refresh" style="background:#3a3a3a">Refresh</button>
   <span id="bstatus"></span>
 </div>
 </section>
@@ -362,14 +364,16 @@ async function loadBonds(){
       box.appendChild(row);
     });
     bstatus('');
+    bondsRetries=0;
   }catch(e){
-    // Transient failures happen (e.g. the dongle is mid-flash-write or a pad
-    // is connecting when the fetch lands): retry instead of sticking on an
-    // empty list.
-    bstatus('load failed — retrying…','err');
-    setTimeout(loadBonds,2500);
+    // Fetches fail transiently while the dongle is busy (flash writes,
+    // connects/disconnects). Retry quietly a few times; past that, the
+    // Refresh button is the recovery path — no scary sticky error text.
+    bstatus('');
+    if(bondsRetries++<3)setTimeout(loadBonds,2000);
   }
 }
+let bondsRetries=0;
 
 async function postBonds(body,msg){
   bstatus(msg,'dirty');
@@ -399,6 +403,7 @@ $('forgetall').onclick=()=>{
   if(!confirm('Forget ALL paired controllers?\nEach will need to be re-paired.'))return;
   postBonds('action=forgetall','forgetting all…');
 };
+$('bonds_refresh').onclick=()=>{bondsRetries=0;bstatus('refreshing…','dirty');loadBonds()};
 
 // ----- Live status (GET /api/slots) -----
 const SLOT_COLORS=['#3b82f6','#ef4444','#22c55e','#ec4899']; // fallback until config loads
