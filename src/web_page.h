@@ -148,7 +148,10 @@ footer .kofi:hover{text-decoration:none;opacity:.9}
   <div class="ledrow" id="slot_colors" style="margin-top:.2rem"></div>
   <div class="hint">Lightbar and strip LED color per controller slot (default
   blue, like player 1 on a PS5). Battery warnings on the strip still blink
-  yellow/red, and games can still override the lightbar while they run.</div>
+  yellow/red, and games can still override the lightbar while they run — but
+  a <b>black</b> lightbar write reverts to the slot color. Tip: set Steam's
+  controller LED brightness to 0% and Steam will stop overriding your slot
+  colors.</div>
 </div>
 
 <div class="field chk">

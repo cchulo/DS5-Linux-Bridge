@@ -263,8 +263,22 @@ void state_update(uint8_t slot, const uint8_t *data, const uint8_t size) {
         kPlayerIndicatorsOffset,
         sizeof(uint8_t)
     );
+    bool led_copy = update.AllowLedColor;
+#if BT_MAX_SLOTS > 1
+    // A pure-black host write would turn the lightbar off and erase the
+    // seat's identity; substitute the slot's configured color instead. This
+    // also makes Steam's lightbar override easy to neutralize: set Steam's
+    // controller LED brightness to 0% (it then always sends black) and pads
+    // keep their slot colors. Non-black host colors pass through as usual.
+    // Single-slot builds keep stock upstream behavior.
+    if (led_copy && update.LedRed == 0 && update.LedGreen == 0 &&
+        update.LedBlue == 0) {
+        state_apply_slot_color(slot);
+        led_copy = false;
+    }
+#endif
     copy_if_allowed(
-        update.AllowLedColor,
+        led_copy,
         offsetof(SetStateData, LedRed),
         sizeof(update.LedRed) * 3
     );
