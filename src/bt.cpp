@@ -229,8 +229,12 @@ static void bt_send_full_state(uint8_t slot) {
 
 void bt_slot_colors_refresh() {
     for (uint8_t i = 0; i < BT_MAX_SLOTS; i++) {
-        if (slots[i].interrupt_cid == 0) continue;
+        // Update EVERY seat's cached state, empty ones included -- a stale
+        // cached color on an empty seat would resurface when a pad is later
+        // moved there (seat state travels with the seat). Only the push
+        // needs a connected pad.
         state_apply_slot_color(i);
+        if (slots[i].interrupt_cid == 0) continue;
         bt_send_full_state(i);
     }
 }
