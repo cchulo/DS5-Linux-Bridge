@@ -12,6 +12,9 @@
 #include <vector>
 #include "btstack_event.h"
 #include "btstack_tlv.h" // persistent blacklist storage (forget-bond enforcement)
+#include "btstack_tlv_flash_bank.h"
+#include "classic/btstack_link_key_db_tlv.h"
+#include "flash_bank_safe.h" // core1-safe TLV flash bank (see bt_init)
 #include "gap.h"
 #include "l2cap.h"
 #include "pico/cyw43_arch.h"
@@ -662,6 +665,20 @@ void bt_l2cap_init() {
 }
 
 int bt_init() {
+    // Re-run the TLV/link-key-db setup that btstack_cyw43_init() already did,
+    // but on top of our core1-safe flash bank (see flash_bank_safe.cpp). The
+    // SDK's bank blocks unboundedly in flash_safe_execute when core1 sleeps
+    // through the lockout: a link-key store at pad-connect then hangs the
+    // main loop until the watchdog reboots (boot loop on connect), and bonds
+    // never persist. Same flash location, safe write path.
+    {
+        static btstack_tlv_flash_bank_t tlv_ctx;
+        const btstack_tlv_t *tlv = btstack_tlv_flash_bank_init_instance(
+            &tlv_ctx, flash_bank_safe_instance(), NULL);
+        btstack_tlv_set_instance(tlv, &tlv_ctx);
+        hci_set_link_key_db(btstack_link_key_db_tlv_get_instance(tlv, &tlv_ctx));
+    }
+
     for (auto &s : slots) {
         queue_init(&s.send_fifo, sizeof(send_element), 10);
     }

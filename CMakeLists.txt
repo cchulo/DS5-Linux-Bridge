@@ -140,6 +140,7 @@ add_executable(ds5-bridge
         src/config.cpp
         src/state_mgr.cpp
         src/tier.cpp
+        src/flash_bank_safe.cpp
         src/ram_mem.c
 )
 
