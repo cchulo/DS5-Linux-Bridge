@@ -525,7 +525,6 @@ extern "C" int fs_read_custom(struct fs_file *file, char *buffer, int count) {
 static char post_buf[POST_BUFSIZE];
 static u16_t post_pos;
 static void *post_conn;
-static uint32_t post_start_ms; // when post_conn was claimed (stale-latch guard)
 enum post_target_t { POST_CONFIG, POST_BONDS, POST_SLOTS, POST_LED };
 static post_target_t post_target; // which endpoint the in-flight POST targets
 static bool last_save_ok = true; // result of the most recent config_save()
@@ -815,18 +814,8 @@ extern "C" err_t httpd_post_begin(void *connection, const char *uri, const char 
 #endif
     else return ERR_VAL;
     if (content_len >= POST_BUFSIZE) return ERR_VAL;
-    const uint32_t now = to_ms_since_boot(get_absolute_time());
-    if (post_conn) {
-        // One POST at a time -- but a POST whose connection died mid-flight
-        // never reaches httpd_post_finished, which would latch us "busy"
-        // forever and make every later save fail silently (seen as "changed
-        // a color, saved, nothing happened"). Steal the latch if the pending
-        // POST is older than any legitimate request could be.
-        if (now - post_start_ms < 3000) return ERR_USE;
-        printf("[NET] stale POST latch (>3 s old) stolen by new request\n");
-    }
+    if (post_conn) return ERR_USE; // one POST at a time
     post_conn = connection;
-    post_start_ms = now;
     post_pos = 0;
     post_target = target;
     return ERR_OK;
