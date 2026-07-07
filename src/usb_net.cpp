@@ -565,6 +565,11 @@ static void apply_post(char *body) {
     if (strstr(body, "factory_reset=1")) {
         watchdog_update();
         last_save_ok = config_factory_reset();
+        // Push the freshly-defaulted slot colors / player LEDs to connected
+        // pads too -- resetting only the stored settings left the pads'
+        // lightbars showing the old colors until they reconnected.
+        bt_slot_colors_refresh();
+        bt_player_led_lock_refresh();
         printf("[NET] factory reset via web UI: %s\n", last_save_ok ? "OK" : "FAILED");
         return;
     }
