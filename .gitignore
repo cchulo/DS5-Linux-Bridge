@@ -5,3 +5,4 @@ build_*
 .vscode
 .idea
 example
+.DS_Store
