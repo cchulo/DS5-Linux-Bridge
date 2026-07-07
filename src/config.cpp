@@ -75,6 +75,7 @@ static_assert(offsetof(Config_body, webconfig_custom_ip) == 12);
 static_assert(offsetof(Config_body, bond_names) == 16);
 static_assert(offsetof(Config_body, audio_slot) == 104);
 static_assert(offsetof(Config_body, feature_snapshot_valid) == 105);
+static_assert(offsetof(Config_body, slot_rgb) == 261);
 static_assert(sizeof(Config_body) <= 320); // keep well inside the 512 B store
 
 // CRC over the first `len` bytes of the body. `len` is the stored size, so an
@@ -144,6 +145,15 @@ void config_valid() {
         body->feature_pair_len < 2 || body->feature_pair_len > sizeof(body->feature_pair)) {
       body->feature_snapshot_valid = 0;
       printf("[Config] feature snapshot invalid, dropped\n");
+    }
+  }
+  // Slot colors: all-zero is "unset" (fresh defaults or a config migrated
+  // from firmware without this field) -> default blue #0000FF. A deliberate
+  // black lightbar isn't representable, which is fine: "off" isn't a slot
+  // identity.
+  for (auto &rgb : body->slot_rgb) {
+    if (rgb[0] == 0 && rgb[1] == 0 && rgb[2] == 0) {
+      rgb[2] = 0xff;
     }
   }
   // Legacy in-body version byte, kept in sync with the header for compatibility

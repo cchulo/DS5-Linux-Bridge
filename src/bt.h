@@ -105,6 +105,11 @@ void bt_slot_power_off(uint8_t slot);
 // mid-connection-setup or on bad indices.
 bool bt_slot_swap(uint8_t a, uint8_t b);
 
+// Re-apply the configured slot colors to every connected pad's cached state
+// and push it (report 0x32), so lightbars update immediately when the user
+// edits slot colors in the web UI.
+void bt_slot_colors_refresh();
+
 // Tick connection watchdogs (pre-ACL attempt + per-slot setup). Call from main loop.
 void bt_connection_watchdog_tick();
 

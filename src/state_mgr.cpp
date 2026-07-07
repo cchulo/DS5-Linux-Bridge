@@ -6,6 +6,7 @@
 #include <cstring>
 
 #include "state_mgr.h"
+#include "config.h"
 #include "tier.h"
 #include "utils.h"
 
@@ -32,18 +33,13 @@ static constexpr uint8_t state_init_data[63] = {
 };
 
 #if BT_MAX_SLOTS > 1
-// PS5-style slot identity, applied at connect (report 0x32) and whenever a
-// slot resets: lightbar color blue/red/green/pink plus the matching
-// player-indicator LED pattern (5-LED bar: center / 2 / 3 / 4 dots). Games
-// override both via AllowLedColor / AllowPlayerIndicators as usual.
-// Single-slot builds keep the fork's default color above so single-controller
-// behavior stays regression-identical to upstream.
-static constexpr uint8_t slot_led_rgb[][3] = {
-    {0x00, 0x00, 0xff}, // slot 0: blue   (player 1)
-    {0xff, 0x00, 0x00}, // slot 1: red    (player 2)
-    {0x00, 0xff, 0x00}, // slot 2: green  (player 3)
-    {0xff, 0x00, 0x40}, // slot 3: pink   (player 4)
-};
+// Slot identity, applied at connect (report 0x32) and whenever a slot
+// resets: the user-configurable slot color (config slot_rgb, web UI; default
+// blue #0000FF for every slot) plus the PS5-style player-indicator pattern
+// (5-LED bar: center / 2 / 3 / 4 dots). Games override both via
+// AllowLedColor / AllowPlayerIndicators as usual. Single-slot builds keep
+// the fork's default color above so single-controller behavior stays
+// regression-identical to upstream.
 static constexpr uint8_t slot_player_leds[] = {
     0x04, // player 1: -- -- ## -- --
     0x0A, // player 2: -- ## -- ## --
@@ -77,13 +73,23 @@ void state_set_local_mute(bool muted) {
     }
 }
 
+void state_apply_slot_color(uint8_t slot) {
+#if BT_MAX_SLOTS > 1
+    if (slot >= BT_MAX_SLOTS) return;
+    const uint8_t *rgb = get_config().slot_rgb[slot];
+    state[slot][kLedColorOffset]     = rgb[0];
+    state[slot][kLedColorOffset + 1] = rgb[1];
+    state[slot][kLedColorOffset + 2] = rgb[2];
+#else
+    (void) slot;
+#endif
+}
+
 void state_slot_reset(uint8_t slot) {
     if (slot >= BT_MAX_SLOTS) return;
     memcpy(state[slot], state_init_data, sizeof(state_init_data));
 #if BT_MAX_SLOTS > 1
-    state[slot][kLedColorOffset]     = slot_led_rgb[slot][0];
-    state[slot][kLedColorOffset + 1] = slot_led_rgb[slot][1];
-    state[slot][kLedColorOffset + 2] = slot_led_rgb[slot][2];
+    state_apply_slot_color(slot);
     state[slot][kPlayerIndicatorsOffset] = slot_player_leds[slot];
 #endif
 }

@@ -235,6 +235,8 @@ static int json_config(char *out, size_t cap) {
                     "\"controller_mode\":%u,"
                     "\"webconfig_subnet\":%u,"
                     "\"webconfig_custom_ip\":\"%u.%u.%u.%u\","
+                    "\"slot_rgb\":[\"%02X%02X%02X\",\"%02X%02X%02X\","
+                    "\"%02X%02X%02X\",\"%02X%02X%02X\"],"
                     "\"max_slots\":%u}",
                     PICO_PROGRAM_VERSION_STRING,
                     c.inactive_time,
@@ -246,6 +248,10 @@ static int json_config(char *out, size_t cap) {
                     c.webconfig_subnet,
                     c.webconfig_custom_ip[0], c.webconfig_custom_ip[1],
                     c.webconfig_custom_ip[2], c.webconfig_custom_ip[3],
+                    c.slot_rgb[0][0], c.slot_rgb[0][1], c.slot_rgb[0][2],
+                    c.slot_rgb[1][0], c.slot_rgb[1][1], c.slot_rgb[1][2],
+                    c.slot_rgb[2][0], c.slot_rgb[2][1], c.slot_rgb[2][2],
+                    c.slot_rgb[3][0], c.slot_rgb[3][1], c.slot_rgb[3][2],
                     BT_MAX_SLOTS);
 }
 
@@ -544,6 +550,19 @@ static void apply_post(char *body) {
             c.controller_mode = (uint8_t) clampi(val, 0, 2);
         } else if (strcmp(tok, "webconfig_subnet") == 0) {
             c.webconfig_subnet = (uint8_t) clampi(val, 0, WEBCONFIG_SUBNET_MAX);
+        } else if (strncmp(tok, "slot_rgb", 8) == 0 &&
+                   tok[8] >= '0' && tok[8] <= '3' && tok[9] == '\0') {
+            // slot_rgb0..slot_rgb3 = "RRGGBB" (the page strips the '#').
+            if (strlen(eq) == 6) {
+                char *end = nullptr;
+                const uint32_t v = (uint32_t) strtoul(eq, &end, 16);
+                if (end == eq + 6) {
+                    const int idx = tok[8] - '0';
+                    c.slot_rgb[idx][0] = (uint8_t) (v >> 16);
+                    c.slot_rgb[idx][1] = (uint8_t) (v >> 8);
+                    c.slot_rgb[idx][2] = (uint8_t) v;
+                }
+            }
         } else if (strcmp(tok, "webconfig_custom_ip") == 0) {
             // Dotted-quad "a.b.c.d" (dots aren't URL-encoded). Parse leniently;
             // config_valid() is the real gate and rejects non-private addresses.
@@ -559,6 +578,9 @@ static void apply_post(char *body) {
     }
 
     set_config(c); // validates + stores in RAM
+    // Slot colors take effect immediately: re-apply to every connected pad's
+    // lightbar (the strip reads the config directly each frame).
+    bt_slot_colors_refresh();
     // The sector erase blocks with interrupts off; feed the watchdog first.
     watchdog_update();
     // config_save() can fail (core1 won't park -> flash write skipped). If it

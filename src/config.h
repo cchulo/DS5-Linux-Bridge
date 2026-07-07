@@ -73,6 +73,12 @@ struct __attribute__((packed)) Config_body {
     uint8_t feature_fw[64];
     uint8_t feature_pair_len;
     uint8_t feature_pair[24];
+    // Per-slot color, applied to both the controller's lightbar (at connect /
+    // slot reset) and its strip LED. Always 4 entries regardless of
+    // MULTI_SLOT_COUNT (like bond_names). All-zero means "unset" and is
+    // defaulted to blue #0000FF in config_valid() (also covers configs
+    // migrated from older firmware).
+    uint8_t slot_rgb[4][3];
 };
 
 struct __attribute__((packed)) Config {

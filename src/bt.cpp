@@ -224,6 +224,14 @@ static void bt_send_full_state(uint8_t slot) {
     bt_write(slot, report32, sizeof(report32));
 }
 
+void bt_slot_colors_refresh() {
+    for (uint8_t i = 0; i < BT_MAX_SLOTS; i++) {
+        if (slots[i].interrupt_cid == 0) continue;
+        state_apply_slot_color(i);
+        bt_send_full_state(i);
+    }
+}
+
 // Reset a slot's connection state (does not touch the send FIFO's queue_t
 // storage, which is drained instead of re-inited).
 static void slot_clear(bt_slot *s) {

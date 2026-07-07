@@ -11,6 +11,7 @@
 #include "pico/time.h"
 
 #include "bt.h"
+#include "config.h"
 #include "ws2812.pio.h"
 
 #ifndef LED_STRIP_GPIO
@@ -32,7 +33,8 @@ constexpr uint64_t FRAME_INTERVAL_US = 33'000;
 constexpr uint16_t BRIGHTNESS_CAP = 13;
 constexpr float    GAMMA          = 2.2f;
 
-constexpr uint8_t BLUE[3]   = {0, 0, 255}; // connected / battery OK
+// Connected color comes from the per-slot config (slot_rgb, default blue
+// #0000FF), matching the pad's lightbar. Warning blinks stay fixed.
 constexpr uint8_t YELLOW[3] = {255, 200, 0};
 constexpr uint8_t RED[3]    = {255, 0, 0};
 
@@ -210,10 +212,11 @@ void ledstrip_tick() {
         bt_get_status(slot, &st);
         if (!st.connected) continue; // off
 
-        const uint8_t *color = BLUE;
+        // Steady color = the slot's configured color (same as its lightbar).
+        const uint8_t *color = get_config().slot_rgb[slot];
         bool on = true;
         // Low-battery blinks only while discharging: a charging pad at 10%
-        // is recovering, not dying, so it shows steady blue.
+        // is recovering, not dying, so it shows its steady slot color.
         if (st.battery_valid && !st.charging) {
             if (st.battery_pct <= LOW_BATT_RED_PCT) {
                 color = RED;

@@ -63,6 +63,9 @@ select.mv{width:auto;font-size:.72rem;padding:.1rem .3rem;background:#252525;bor
 #led_dbg button{margin-top:0;padding:.4rem .9rem;font-size:.85rem;background:#3a3a3a}
 .ledrow{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-top:.6rem}
 .ledrow .ledlbl{color:#888;font-size:.85rem;min-width:6.5rem}
+details.drawer{border:1px solid #333;border-radius:8px;margin:1rem 0;padding:0 1rem .4rem;background:#151515}
+details.drawer>summary{cursor:pointer;padding:.8rem 0;font-weight:600;color:#eee;user-select:none}
+details.drawer[open]>summary{border-bottom:1px solid #2a2a2a}
 .batt{display:inline-flex;align-items:center;gap:.35rem}
 .batt .bar{width:34px;height:14px;border:1px solid #888;border-radius:2px;position:relative;padding:1px}
 .batt .bar::after{content:"";position:absolute;right:-3px;top:4px;width:2px;height:6px;background:#888}
@@ -78,6 +81,9 @@ footer .kofi:hover{text-decoration:none;opacity:.9}
 <p>Adapter configuration. Changes are saved to the adapter's flash.</p>
 
 <div id="statuscard"><div class="slotrow"><span class="dot"></span><span class="s">Checking…</span></div></div>
+
+<details class="drawer" open>
+<summary>Controller</summary>
 
 <div class="field">
   <label class="lbl">Controller mode</label>
@@ -116,10 +122,51 @@ footer .kofi:hover{text-decoration:none;opacity:.9}
   <label for="disable_inactive_disconnect">Never auto-disconnect on inactivity</label>
 </div>
 
+</details>
+
+<details class="drawer">
+<summary>Lights</summary>
+
+<div class="field">
+  <label class="lbl">Slot colors</label>
+  <div class="ledrow" id="slot_colors" style="margin-top:.2rem"></div>
+  <div class="hint">Lightbar and strip LED color per controller slot (default
+  blue, like player 1 on a PS5). Battery warnings on the strip still blink
+  yellow/red, and games can still override the lightbar while they run.</div>
+</div>
+
 <div class="field chk">
   <input type="checkbox" id="disable_pico_led">
   <label for="disable_pico_led">Disable the onboard Pico LED</label>
 </div>
+
+<div id="led_dbg" style="display:none">
+<div class="field">
+  <label class="lbl">LED debug</label>
+  <div class="hint">Drives the WS2812B strip directly (still brightness-capped).
+  Everything reverts to the live status display automatically after 60&nbsp;s.</div>
+  <div class="ledrow">
+    <span class="ledlbl">Simulate slot</span>
+    <select id="led_slot"></select>
+    <button id="led_sim_low">Low battery</button>
+    <button id="led_sim_crit">Critical</button>
+    <button id="led_sim_norm">Normal</button>
+  </div>
+  <div class="ledrow">
+    <span class="ledlbl">Whole strip</span>
+    <input type="color" id="led_color" value="#0000ff">
+    <button id="led_chase">Chase</button>
+    <button id="led_off">All off</button>
+    <button id="led_normal">All normal</button>
+    <span id="lstatus"></span>
+  </div>
+</div>
+</div>
+
+</details>
+
+<details class="drawer">
+<summary>Network</summary>
 
 <div class="field">
   <label class="lbl">Config page address</label>
@@ -145,6 +192,8 @@ footer .kofi:hover{text-decoration:none;opacity:.9}
   </div>
 </div>
 
+</details>
+
 <div>
   <button id="save">Save</button>
   <button id="factoryreset" class="fg">Factory reset</button>
@@ -153,9 +202,8 @@ footer .kofi:hover{text-decoration:none;opacity:.9}
 <div class="hint">Factory reset restores all settings above to defaults. Paired
   controllers are kept (use <b>Forget all</b> below to remove those).</div>
 
-<hr>
-
-<h2>Paired controllers</h2>
+<details class="drawer">
+<summary>Paired controllers</summary>
 <div class="hint">Controllers the adapter remembers. The adapter holds up to
   <span id="bond_max">4</span>. Once a controller is paired the adapter stops
   looking for new ones (a remembered controller reconnects on its own) &mdash;
@@ -167,28 +215,7 @@ footer .kofi:hover{text-decoration:none;opacity:.9}
   <button id="forgetall" class="fg">Forget all</button>
   <span id="bstatus"></span>
 </div>
-
-<div id="led_dbg" style="display:none">
-<hr>
-<h2>LED debug</h2>
-<div class="hint">Drives the WS2812B strip directly (still brightness-capped).
-Everything reverts to the live status display automatically after 60&nbsp;s.</div>
-<div class="ledrow">
-  <span class="ledlbl">Simulate slot</span>
-  <select id="led_slot"></select>
-  <button id="led_sim_low">Low battery</button>
-  <button id="led_sim_crit">Critical</button>
-  <button id="led_sim_norm">Normal</button>
-</div>
-<div class="ledrow">
-  <span class="ledlbl">Whole strip</span>
-  <input type="color" id="led_color" value="#0000ff">
-  <button id="led_chase">Chase</button>
-  <button id="led_off">All off</button>
-  <button id="led_normal">All normal</button>
-  <span id="lstatus"></span>
-</div>
-</div>
+</details>
 
 <script>
 const $=id=>document.getElementById(id);
@@ -218,13 +245,26 @@ async function load(){
     if(c.webconfig_custom_ip&&c.webconfig_custom_ip!=='0.0.0.0')
       $('webconfig_custom_ip').value=c.webconfig_custom_ip;
     toggleCustomIp();
+    const sc=$('slot_colors');
+    if(sc.children.length===0){
+      for(let i=0;i<(c.max_slots||4);i++){
+        const w=document.createElement('label');
+        w.style.cssText='display:flex;flex-direction:column;align-items:center;gap:.25rem;font-size:.75rem;color:#888';
+        const inp=document.createElement('input');inp.type='color';inp.id='slot_rgb'+i;
+        inp.onchange=markDirty;
+        w.append(inp,document.createTextNode('Slot '+(i+1)));
+        sc.appendChild(w);
+      }
+    }
+    (c.slot_rgb||[]).forEach((h,i)=>{const el=$('slot_rgb'+i);if(el)el.value='#'+h.toLowerCase()});
+    slotColors=c.slot_rgb||null;
     upd.forEach(f=>f());
     $('save').disabled=true;setStatus('');
   }catch(e){setStatus('load failed','err')}
 }
 
 async function save(){
-  const body=[
+  const parts=[
     'controller_mode='+$('controller_mode').value,
     'polling_rate_mode='+$('polling_rate_mode').value,
     'audio_buffer_length='+$('audio_buffer_length').value,
@@ -233,11 +273,22 @@ async function save(){
     'disable_pico_led='+($('disable_pico_led').checked?1:0),
     'webconfig_subnet='+$('webconfig_subnet').value,
     'webconfig_custom_ip='+encodeURIComponent($('webconfig_custom_ip').value.trim())
-  ].join('&');
+  ];
+  for(let i=0;i<4;i++){
+    const el=$('slot_rgb'+i);
+    if(el)parts.push('slot_rgb'+i+'='+el.value.slice(1));
+  }
+  const body=parts.join('&');
   setStatus('saving…','dirty');
   try{
     const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});
-    if(r.ok){$('save').disabled=true;setStatus('Saved ✓','ok')}
+    if(r.ok){
+      $('save').disabled=true;setStatus('Saved ✓','ok');
+      const sc=[];
+      for(let i=0;i<4;i++){const el=$('slot_rgb'+i);sc.push(el?el.value.slice(1).toUpperCase():'0000FF')}
+      slotColors=sc;
+      loadStatus();
+    }
     else setStatus('save failed — not written to flash, try again','err');
   }catch(e){setStatus('save failed','err')}
 }
@@ -317,14 +368,17 @@ $('forgetall').onclick=()=>{
 };
 
 // ----- Live status (GET /api/slots) -----
-const SLOT_COLORS=['#3b82f6','#ef4444','#22c55e','#ec4899'];
+const SLOT_COLORS=['#3b82f6','#ef4444','#22c55e','#ec4899']; // fallback until config loads
+let slotColors=null; // configured per-slot colors ("RRGGBB"), set by load()
 let lastSlots=null;
 function chip(txt,extra){const c=document.createElement('span');c.className='chip'+(extra?' '+extra:'');c.textContent=txt;return c}
 function slotRow(d,s){
   const row=document.createElement('div');
   row.className='slotrow'+(s.connected?'':' off');
   const dot=document.createElement('span');dot.className='dot';
-  if(s.connected)dot.style.background=d.max>1?SLOT_COLORS[s.slot%4]:'#4ade80';
+  if(s.connected)dot.style.background=d.max>1
+    ?(slotColors&&slotColors[s.slot]?'#'+slotColors[s.slot]:SLOT_COLORS[s.slot%4])
+    :'#4ade80';
   const txt=document.createElement('span');txt.className='s';
   const pre=d.max>1?('Slot '+(s.slot+1)+': '):'';
   row.append(dot,txt);

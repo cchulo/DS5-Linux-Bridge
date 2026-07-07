@@ -5,7 +5,8 @@
 // (0,2,4,6) are always dark, odd pixels (1,3,5,7) indicate controller slots
 // 1-4. Per slot:
 //   off             = no controller connected
-//   solid blue      = connected
+//   solid slot color= connected (config slot_rgb; default blue #0000FF,
+//                     always matches the pad's lightbar)
 //   blinking yellow = battery <= 20% (discharging)
 //   blinking red    = battery <= 10% (discharging; faster blink)
 // Global brightness is capped at 5%.
