@@ -124,6 +124,12 @@ void bt_connection_watchdog_tick();
 // Number of bytes in a Bluetooth address (matches btstack bd_addr_t).
 #define BT_ADDR_LEN 6
 
+// True once the BT stack reaches HCI_STATE_WORKING. The link-key iterator
+// (bt_bond_list) returns nothing before that -- with always-FULL USB
+// enumeration the config page can load before the stack is up, so /api/bonds
+// reports this and the page retries instead of showing "no bonds".
+bool bt_stack_ready();
+
 // Copy up to `max` stored bond addresses into addrs (each BT_ADDR_LEN bytes).
 // Returns the number written.
 int bt_bond_list(uint8_t (*addrs)[BT_ADDR_LEN], int max);

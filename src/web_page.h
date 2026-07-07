@@ -203,7 +203,7 @@ footer .kofi:hover{text-decoration:none;opacity:.9}
 <div class="hint">Factory reset restores all settings above to defaults. Paired
   controllers are kept (use <b>Forget all</b> below to remove those).</div>
 
-<details class="drawer">
+<details class="drawer" id="bonds_drawer">
 <summary>Paired controllers</summary>
 <div class="hint">Controllers the adapter remembers. The adapter holds up to
   <span id="bond_max">4</span>. Once a controller is paired the adapter stops
@@ -314,6 +314,13 @@ function bstatus(msg,cls){const s=$('bstatus');s.className=cls||'';s.textContent
 async function loadBonds(){
   try{
     const d=await (await fetch('/api/bonds')).json();
+    // The BT stack may still be starting when the page loads (the bond list
+    // reads its flash store); retry until it reports ready.
+    if(d.ready===false){
+      $('bonds_empty').style.display='none';
+      setTimeout(loadBonds,1500);
+      return;
+    }
     $('bond_max').textContent=d.max;
     const box=$('bonds');box.innerHTML='';
     const bonds=d.bonds||[];
@@ -471,6 +478,10 @@ $('led_sim_norm').onclick=()=>postLed('action=sim&slot='+$('led_slot').value+'&l
 $('led_chase').onclick=()=>postLed('action=chase&rgb='+$('led_color').value.slice(1));
 $('led_off').onclick=()=>postLed('action=set&rgb=000000&pixel=all');
 $('led_normal').onclick=()=>postLed('action=clear');
+
+// Re-fetch the bond list whenever the drawer is opened, so it can never
+// stay stale from a fetch that ran before the BT stack was up.
+$('bonds_drawer').addEventListener('toggle',()=>{if($('bonds_drawer').open)loadBonds()});
 
 load();
 loadBonds();

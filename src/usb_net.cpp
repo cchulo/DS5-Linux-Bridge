@@ -326,7 +326,8 @@ static int json_bonds(char *out, size_t cap) {
     char conn_hex[13] = "";
     if (have_conn) addr_to_hex(conn, conn_hex);
 
-    int w = snprintf(out, cap, "{\"connected\":\"%s\",\"max\":%d,\"bonds\":[",
+    int w = snprintf(out, cap, "{\"ready\":%s,\"connected\":\"%s\",\"max\":%d,\"bonds\":[",
+                     bt_stack_ready() ? "true" : "false",
                      conn_hex, CONFIG_MAX_BOND_NAMES);
     for (int i = 0; i < n && w < (int) cap; i++) {
         char hex[13];

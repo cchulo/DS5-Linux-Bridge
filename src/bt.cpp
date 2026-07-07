@@ -528,6 +528,10 @@ void bt_blacklist_persist_if_dirty() {
 // while a controller is connected, the stack is always working when these run.
 //--------------------------------------------------------------------+
 
+bool bt_stack_ready() {
+    return hci_get_state() == HCI_STATE_WORKING;
+}
+
 int bt_bond_list(uint8_t (*addrs)[BT_ADDR_LEN], int max) {
     if (!addrs || max <= 0) return 0;
     btstack_link_key_iterator_t it;
