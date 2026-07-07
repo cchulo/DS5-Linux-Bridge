@@ -43,13 +43,16 @@ endif ()
 
 # --- Phase 2/3 hardware options: declared for pin-map stability, not yet
 # implemented. All default OFF; enabling one before its phase lands only
-# reserves the GPIO. See PLAN GPIO map (GP2 strip / GP3 power).
+# reserves the GPIO. See PLAN GPIO map (GP28 strip / GP3 power).
 option(ENABLE_POWER_PIN "Pulse a GPIO (optocoupler to PWR_SW header) as wake fallback" OFF)
 set(POWER_PIN_GPIO 3 CACHE STRING "GPIO for the power-button pulse")
-# Strip is capped at 4 WS2812 LEDs: one per controller slot (project descope
-# 2026-07-06 -- no ambient bar, and the LED matrix was dropped entirely).
-option(ENABLE_LED_STRIP "WS2812 per-slot status LEDs (max 4) via PIO" OFF)
-set(LED_STRIP_GPIO 2 CACHE STRING "GPIO for LED strip data")
+# Controller-status LEDs: an 8-pixel WS2812B chain with alternating spacers
+# (4 active slot indicators), 10% brightness cap. Default data pin GP28
+# (physical pin 34): the PIO can drive any GPIO, and GP28 puts the whole LED
+# harness on one corner of the board next to GND (pin 38) and VBUS 5V
+# (pin 40).
+option(ENABLE_LED_STRIP "WS2812B controller-status LEDs via PIO" OFF)
+set(LED_STRIP_GPIO 28 CACHE STRING "GPIO for LED strip data")
 
 if (PICO_W_BUILD AND WAVESHARE_RP2350B_PLUS_W_BUILD)
         message(FATAL_ERROR "PICO_W_BUILD and WAVESHARE_RP2350B_PLUS_W_BUILD are mutually exclusive")
@@ -166,6 +169,16 @@ endif ()
 
 if (ENABLE_BATT_LED)
         target_sources(ds5-bridge PRIVATE src/battery_led.cpp)
+endif ()
+
+if (ENABLE_LED_STRIP)
+        target_sources(ds5-bridge PRIVATE src/ledstrip.cpp)
+        pico_generate_pio_header(ds5-bridge ${CMAKE_CURRENT_SOURCE_DIR}/src/ws2812.pio)
+        target_compile_definitions(ds5-bridge PRIVATE
+                ENABLE_LED_STRIP=1
+                LED_STRIP_GPIO=${LED_STRIP_GPIO}
+        )
+        target_link_libraries(ds5-bridge hardware_pio)
 endif ()
 
 

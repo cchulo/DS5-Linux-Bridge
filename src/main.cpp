@@ -25,6 +25,10 @@
 #include "battery_led.h"
 #endif
 
+#ifdef ENABLE_LED_STRIP
+#include "ledstrip.h"
+#endif
+
 // Pico SDK speciifically for waiting on conditions
 #include "pico/critical_section.h"
 #include "pico/time.h"
@@ -444,6 +448,12 @@ int main() {
   battery_led_init();
 #endif
 
+#ifdef ENABLE_LED_STRIP
+  // After cyw43_arch_init(): the radio's PIO SPI state machine is already
+  // claimed, so the strip's dynamic claim can't collide with it.
+  ledstrip_init();
+#endif
+
   if (watchdog_caused_reboot()) {
     printf("Rebooted by Watchdog!\n");
     // 当崩溃重启以后，闪三下灯
@@ -519,6 +529,9 @@ int main() {
     dse_task();
 #if ENABLE_BATT_LED
     battery_led_tick();
+#endif
+#ifdef ENABLE_LED_STRIP
+    ledstrip_tick();
 #endif
     // Yield only when the hot paths are idle; otherwise keep draining USB/BT.
     if (!tud_audio_available() && !bt_send_pending()) {
