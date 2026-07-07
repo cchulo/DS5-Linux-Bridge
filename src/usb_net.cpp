@@ -444,7 +444,7 @@ extern "C" int fs_open_custom(struct fs_file *file, const char *name) {
     // Firmware log (RAM ring of all printf diagnostics; see weblog.h).
     // Plain text so it reads directly in a browser tab.
     if (strcmp(name, "/api/log") == 0) {
-        static char logbuf[1025];
+        static char logbuf[2113]; // frozen boot KB + gap marker + recent KB
         const int len = weblog_snapshot(logbuf, sizeof(logbuf));
         return make_file(file, "200 OK", "text/plain; charset=utf-8", logbuf, len);
     }

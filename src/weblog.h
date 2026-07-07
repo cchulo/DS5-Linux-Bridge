@@ -1,7 +1,8 @@
 //
-// RAM ring buffer that captures stdio (all printf diagnostics) so the
-// firmware log can be read from a browser at /api/log -- no UART adapter
-// needed. Keeps the most recent ~4 KB; older output rolls off.
+// RAM capture of stdio (all printf diagnostics) so the firmware log can be
+// read from a browser at /api/log -- no UART adapter needed. Two sections:
+// the first KB of output is frozen forever (boot diagnostics survive hours
+// of HCI chatter), and a rolling ring keeps the most recent KB.
 //
 
 #ifndef DS5_BRIDGE_WEBLOG_H

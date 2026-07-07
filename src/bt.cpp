@@ -277,6 +277,20 @@ static bool pairing_window = false;
 // accept until CONNECTION_COMPLETE hands off to the slot's own watchdog).
 static absolute_time_t connect_attempt_started = 0;
 
+// True while any connection attempt or HID setup is in flight. Deferred
+// flash flushes (blacklist, feature snapshot) MUST wait for this to clear:
+// a flash erase blocks interrupts long enough to stall the control-channel
+// feature exchange, and the setup watchdog then kills the link -- seen as
+// "first pair connects then drops; the second connect works" (the second
+// attempt has nothing dirty left to flush).
+static bool bt_setup_in_progress() {
+    if (connect_attempt_started != 0) return true;
+    for (auto &s : slots) {
+        if (s.connect_attempt_started != 0) return true;
+    }
+    return false;
+}
+
 // Persistent blacklist of controllers the user forgot via the web UI. Survives
 // power-cycles via BTstack TLV flash. Without it, forgetting a controller that
 // is connected (or actively paging us to auto-reconnect) is futile: BTstack
@@ -519,6 +533,7 @@ void bt_blacklist_persist_if_dirty() {
     if (!bt_blacklist_dirty) return;
     uint32_t now = to_ms_since_boot(get_absolute_time());
     if (now - bt_blacklist_dirty_ms < 5000) return;
+    if (bt_setup_in_progress()) return; // flash write would stall the setup
     bt_blacklist_dirty = false;
     bt_blacklist_persist();
 }
@@ -1366,6 +1381,7 @@ static void bt_feature_snapshot_maybe_capture(bt_slot *s) {
 
 void bt_feature_snapshot_persist_if_dirty() {
     if (!feature_snapshot_save_pending) return;
+    if (bt_setup_in_progress()) return; // flash write would stall the setup
     feature_snapshot_save_pending = false;
     const bool ok = config_save();
     printf("[BT] Feature snapshot persist: %s\n", ok ? "OK" : "FAILED");

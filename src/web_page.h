@@ -343,7 +343,13 @@ async function loadBonds(){
       box.appendChild(row);
     });
     bstatus('');
-  }catch(e){bstatus('load failed','err')}
+  }catch(e){
+    // Transient failures happen (e.g. the dongle is mid-flash-write or a pad
+    // is connecting when the fetch lands): retry instead of sticking on an
+    // empty list.
+    bstatus('load failed — retrying…','err');
+    setTimeout(loadBonds,2500);
+  }
 }
 
 async function postBonds(body,msg){
@@ -441,6 +447,9 @@ async function postSlots(body){
 async function loadStatus(){
   try{
     const d=await (await fetch('/api/slots')).json();
+    // A connect/disconnect can change the bond list (pairing just finished,
+    // forget just disconnected a pad) — refresh it on any count change.
+    if(lastSlots&&lastSlots.connected!==d.connected)loadBonds();
     lastSlots=d;
     const card=$('statuscard');card.innerHTML='';
     card.className=d.connected>0?'on':'';
