@@ -238,6 +238,9 @@ static int json_config(char *out, size_t cap) {
                     "\"webconfig_custom_ip\":\"%u.%u.%u.%u\","
                     "\"slot_rgb\":[\"%02X%02X%02X\",\"%02X%02X%02X\","
                     "\"%02X%02X%02X\",\"%02X%02X%02X\"],"
+                    "\"led_count\":%u,"
+                    "\"led_max\":%u,"
+                    "\"led_masks\":[\"%lX\",\"%lX\",\"%lX\",\"%lX\"],"
                     "\"max_slots\":%u}",
                     PICO_PROGRAM_VERSION_STRING,
                     c.inactive_time,
@@ -253,6 +256,12 @@ static int json_config(char *out, size_t cap) {
                     c.slot_rgb[1][0], c.slot_rgb[1][1], c.slot_rgb[1][2],
                     c.slot_rgb[2][0], c.slot_rgb[2][1], c.slot_rgb[2][2],
                     c.slot_rgb[3][0], c.slot_rgb[3][1], c.slot_rgb[3][2],
+                    c.led_count,
+                    LED_STRIP_MAX_PIXELS,
+                    (unsigned long) c.slot_led_mask[0],
+                    (unsigned long) c.slot_led_mask[1],
+                    (unsigned long) c.slot_led_mask[2],
+                    (unsigned long) c.slot_led_mask[3],
                     BT_MAX_SLOTS);
 }
 
@@ -578,6 +587,17 @@ static void apply_post(char *body) {
             c.controller_mode = (uint8_t) clampi(val, 0, 2);
         } else if (strcmp(tok, "webconfig_subnet") == 0) {
             c.webconfig_subnet = (uint8_t) clampi(val, 0, WEBCONFIG_SUBNET_MAX);
+        } else if (strcmp(tok, "led_count") == 0) {
+            c.led_count = (uint8_t) clampi(val, 1, LED_STRIP_MAX_PIXELS);
+        } else if (strncmp(tok, "led_mask", 8) == 0 &&
+                   tok[8] >= '0' && tok[8] <= '3' && tok[9] == '\0') {
+            // led_mask0..led_mask3 = pixel bitmask in hex.
+            char *end = nullptr;
+            const uint32_t v = (uint32_t) strtoul(eq, &end, 16);
+            if (end && end != eq && *end == '\0') {
+                c.slot_led_mask[tok[8] - '0'] = v;
+                c.led_map_valid = 1; // masks are now authoritative
+            }
         } else if (strncmp(tok, "slot_rgb", 8) == 0 &&
                    tok[8] >= '0' && tok[8] <= '3' && tok[9] == '\0') {
             // slot_rgb0..slot_rgb3 = "RRGGBB" (the page strips the '#').

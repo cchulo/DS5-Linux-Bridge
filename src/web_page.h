@@ -64,6 +64,9 @@ select.mv{width:auto;font-size:.72rem;padding:.1rem .3rem;background:#252525;bor
 #led_dbg button{margin-top:0;padding:.4rem .9rem;font-size:.85rem;background:#3a3a3a}
 .ledrow{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-top:.6rem}
 .ledrow .ledlbl{color:#888;font-size:.85rem;min-width:6.5rem}
+.ledmaprow{display:flex;align-items:center;gap:.3rem;margin:.3rem 0;flex-wrap:wrap}
+.ledmaprow .mlbl{color:#888;font-size:.75rem;min-width:3.2rem}
+.ledcell{width:1.2rem;height:1.2rem;border-radius:50%;border:1px solid #444;background:#222;cursor:pointer;font-size:.55rem;color:#666;display:inline-flex;align-items:center;justify-content:center;user-select:none}
 #layout{display:flex;gap:1rem;align-items:flex-start;margin-top:1rem}
 #nav{flex:0 0 8.7rem;display:flex;flex-direction:column;gap:.35rem;position:sticky;top:1rem}
 #nav button{background:#1a1a1a;border:1px solid #333;color:#bbb;text-align:left;padding:.55rem .8rem;border-radius:6px;margin:0;font-size:.9rem;cursor:pointer}
@@ -151,6 +154,23 @@ footer .kofi:hover{text-decoration:none;opacity:.9}
 <div class="field chk">
   <input type="checkbox" id="disable_pico_led">
   <label for="disable_pico_led">Disable the onboard Pico LED</label>
+</div>
+
+<div id="led_strip_cfg" style="display:none">
+<div class="field">
+  <label class="lbl">LED strip layout</label>
+  <div style="display:flex;align-items:center;gap:.6rem">
+    <span class="hint" style="margin:0">Number of LEDs</span>
+    <input type="number" id="led_count" min="1" max="32" style="width:5rem">
+  </div>
+  <div class="hint">⚠️ The Pico can safely power at most <b>8</b> LEDs from
+  its own USB supply. For more, power the strip from an external 5&nbsp;V
+  source (sharing ground with the Pico) — only the data line stays on GP28.</div>
+  <div id="led_map" style="margin-top:.6rem"></div>
+  <div class="hint">Click the LEDs each slot should light — any shape works
+  (line, ring, square…). LEDs are numbered from the first one on the strip.
+  Unassigned LEDs stay dark.</div>
+</div>
 </div>
 
 <div id="led_dbg" style="display:none">
@@ -275,6 +295,13 @@ async function load(){
     }
     (c.slot_rgb||[]).forEach((h,i)=>{const el=$('slot_rgb'+i);if(el)el.value='#'+h.toLowerCase()});
     slotColors=c.slot_rgb||null;
+    maxSlots=c.max_slots||4;
+    ledMax=c.led_max||32;
+    $('led_count').max=ledMax;
+    ledCount=c.led_count||8;
+    $('led_count').value=ledCount;
+    ledMasks=(c.led_masks||['2','8','20','80']).map(h=>parseInt(h,16)>>>0);
+    buildLedMap();
     upd.forEach(f=>f());
     $('save').disabled=true;setStatus('');
   }catch(e){setStatus('load failed','err')}
@@ -295,6 +322,8 @@ async function save(){
     const el=$('slot_rgb'+i);
     if(el)parts.push('slot_rgb'+i+'='+el.value.slice(1));
   }
+  parts.push('led_count='+ledCount);
+  for(let i=0;i<4;i++)parts.push('led_mask'+i+'='+(ledMasks[i]>>>0).toString(16));
   const body=parts.join('&');
   setStatus('saving…','dirty');
   try{
@@ -304,6 +333,7 @@ async function save(){
       const sc=[];
       for(let i=0;i<4;i++){const el=$('slot_rgb'+i);sc.push(el?el.value.slice(1).toUpperCase():'0000FF')}
       slotColors=sc;
+      buildLedMap();
       loadStatus();
     }
     else setStatus('save failed — not written to flash, try again','err');
@@ -405,6 +435,44 @@ $('forgetall').onclick=()=>{
 };
 $('bonds_refresh').onclick=()=>{bondsRetries=0;bstatus('refreshing…','dirty');loadBonds()};
 
+// ----- LED strip layout mapper -----
+let maxSlots=4;
+let ledMax=32;
+let ledCount=8;
+let ledMasks=[2,8,32,128]; // default: slot k -> pixel 2k+1
+function slotCss(i){return (slotColors&&slotColors[i])?'#'+slotColors[i]:SLOT_COLORS[i%4]}
+function buildLedMap(){
+  const box=$('led_map');box.innerHTML='';
+  for(let s=0;s<maxSlots;s++){
+    const row=document.createElement('div');row.className='ledmaprow';
+    const l=document.createElement('span');l.className='mlbl';l.textContent='Slot '+(s+1);
+    row.appendChild(l);
+    for(let p=0;p<ledCount;p++){
+      const c=document.createElement('span');c.className='ledcell';
+      c.textContent=p+1;
+      const paint=()=>{
+        const on=!!(ledMasks[s]&(1<<p));
+        c.style.background=on?slotCss(s):'#222';
+        c.style.borderColor=on?'#999':'#444';
+        c.style.color=on?'#111':'#666';
+      };
+      paint();
+      c.onclick=()=>{ledMasks[s]^=(1<<p);paint();markDirty()};
+      row.appendChild(c);
+    }
+    box.appendChild(row);
+  }
+}
+$('led_count').onchange=()=>{
+  let v=parseInt($('led_count').value,10);
+  if(isNaN(v))v=8;
+  v=Math.min(ledMax,Math.max(1,v));
+  $('led_count').value=v;
+  ledCount=v;
+  buildLedMap();
+  markDirty();
+};
+
 // ----- Live status (GET /api/slots) -----
 const SLOT_COLORS=['#3b82f6','#ef4444','#22c55e','#ec4899']; // fallback until config loads
 let slotColors=null; // configured per-slot colors ("RRGGBB"), set by load()
@@ -480,6 +548,7 @@ async function loadStatus(){
     (d.slots||[]).forEach(s=>card.appendChild(slotRow(d,s)));
     if(d.led){
       $('led_dbg').style.display='';
+      $('led_strip_cfg').style.display='';
       const sel=$('led_slot');
       if(sel.options.length===0){
         for(let i=0;i<d.max;i++){

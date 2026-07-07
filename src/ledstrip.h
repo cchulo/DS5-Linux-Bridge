@@ -1,9 +1,10 @@
 //
 // WS2812B controller-status LEDs (ENABLE_LED_STRIP, data on LED_STRIP_GPIO).
 //
-// The physical chain is 8 pixels with alternating spacers: even pixels
-// (0,2,4,6) are always dark, odd pixels (1,3,5,7) indicate controller slots
-// 1-4. Per slot:
+// Strip length (led_count, default 8, max LED_STRIP_MAX_PIXELS) and the
+// pixels each slot lights (slot_led_mask bitmasks) are user-configured from
+// the web UI, so any physical layout works (line, ring, square...). The
+// default maps slot k to pixel 2k+1 with dark spacers between. Per slot:
 //   off             = no controller connected
 //   solid slot color= connected (config slot_rgb; default blue #0000FF,
 //                     always matches the pad's lightbar)

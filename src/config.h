@@ -13,6 +13,11 @@
 #define CONFIG_BOND_ADDR_LEN  6
 #define CONFIG_BOND_NAME_LEN  16 // 15 chars + NUL
 
+// Hard ceiling on configurable strip length (bitmask storage + frame buffer
+// sizing). The UI warns that anything past 8 needs external 5 V power; 32 is
+// plenty for rings/squares while keeping the render loop cheap.
+#define LED_STRIP_MAX_PIXELS 32
+
 //--------------------------------------------------------------------+
 // Config_body layout is APPEND-ONLY. To stay compatible with configs
 // already written to flash by older firmware, obey these rules:
@@ -79,6 +84,16 @@ struct __attribute__((packed)) Config_body {
     // defaulted to blue #0000FF in config_valid() (also covers configs
     // migrated from older firmware).
     uint8_t slot_rgb[4][3];
+    // LED strip layout. led_count = how many pixels the attached strip has
+    // (1..LED_STRIP_MAX_PIXELS; 0 = unset -> 8). slot_led_mask[k] bit i means
+    // pixel i lights up for slot k, so any physical arrangement (line, ring,
+    // square) can be mapped from the web UI. led_map_valid = 0 means the
+    // masks were never saved (fresh/migrated config) and config_valid()
+    // installs the classic alternating default (slot k -> pixel 2k+1);
+    // 1 means the masks are authoritative, including deliberately empty ones.
+    uint8_t  led_count;
+    uint8_t  led_map_valid;
+    uint32_t slot_led_mask[4];
 };
 
 struct __attribute__((packed)) Config {

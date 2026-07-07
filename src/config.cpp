@@ -77,6 +77,7 @@ static_assert(offsetof(Config_body, bond_names) == 16);
 static_assert(offsetof(Config_body, audio_slot) == 104);
 static_assert(offsetof(Config_body, feature_snapshot_valid) == 105);
 static_assert(offsetof(Config_body, slot_rgb) == 261);
+static_assert(offsetof(Config_body, led_count) == 273);
 static_assert(sizeof(Config_body) <= 320); // keep well inside the 512 B store
 
 // CRC over the first `len` bytes of the body. `len` is the stored size, so an
@@ -155,6 +156,19 @@ void config_valid() {
   for (auto &rgb : body->slot_rgb) {
     if (rgb[0] == 0 && rgb[1] == 0 && rgb[2] == 0) {
       rgb[2] = 0xff;
+    }
+  }
+  // LED strip layout: 0 = unset (migrated config) -> 8-pixel default.
+  if (body->led_count < 1 || body->led_count > LED_STRIP_MAX_PIXELS) {
+    body->led_count = 8;
+  }
+  if (body->led_map_valid > 1) {
+    body->led_map_valid = 0;
+  }
+  if (!body->led_map_valid) {
+    // Classic alternating default: slot k lights pixel 2k+1, spacers dark.
+    for (int s = 0; s < 4; s++) {
+      body->slot_led_mask[s] = 1u << (s * 2 + 1);
     }
   }
   // Legacy in-body version byte, kept in sync with the header for compatibility

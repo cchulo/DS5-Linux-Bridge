@@ -20,10 +20,26 @@
 
 // ---- Tunables ----
 namespace {
-// Physical chain: alternating spacer/indicator pixels. Even pixels stay
-// dark; slot k lights pixel 2k+1.
-constexpr int PIXEL_COUNT = BT_MAX_SLOTS * 2;
-constexpr int slot_pixel(int slot) { return slot * 2 + 1; }
+// Strip geometry is user-configured: led_count pixels (default 8) and a
+// per-slot pixel bitmask (default: slot k lights pixel 2k+1), so any layout
+// -- line, ring, square -- maps from the web UI. MAX_PIXELS bounds buffers;
+// every frame pushes the full MAX so shrinking led_count can't strand lit
+// pixels beyond the new end.
+constexpr int MAX_PIXELS = LED_STRIP_MAX_PIXELS;
+
+inline int led_count() { return get_config().led_count; }
+
+// Paint every mask pixel below `count` with `color`.
+inline void paint_mask(uint8_t frame[][3], uint32_t mask, int count,
+                       const uint8_t *color) {
+    for (int p = 0; p < count; p++) {
+        if (mask & (1u << p)) {
+            frame[p][0] = color[0];
+            frame[p][1] = color[1];
+            frame[p][2] = color[2];
+        }
+    }
+}
 
 // ~30 Hz. The inter-frame gap also serves as the WS2812B latch/reset time:
 // newer (V5) batches need >= 280 us, and 33 ms clears that easily.
@@ -62,7 +78,7 @@ bool     dbg_active = false;
 uint64_t dbg_until_us = 0;
 int      dbg_chase = -1;
 uint8_t  dbg_chase_rgb[3];
-uint8_t  dbg_px[PIXEL_COUNT][3];
+uint8_t  dbg_px[MAX_PIXELS][3];
 // Per-slot low-battery simulation overlay: 0 = live status, 1 = low
 // (yellow blink), 2 = critical (red blink). Unlike the global debug modes
 // above, this overlays the NORMAL rendering, so one slot can preview a dying
@@ -96,8 +112,8 @@ void ledstrip_init() {
     }
     ws2812_program_init(led_pio, led_sm, led_offset, LED_STRIP_GPIO, 800000.0f, false);
     led_ready = true;
-    printf("[LED] WS2812B strip: %d pixels (%d slot indicators) on GP%d (PIO%d sm%d)\n",
-           PIXEL_COUNT, BT_MAX_SLOTS, LED_STRIP_GPIO, pio_get_index(led_pio), led_sm);
+    printf("[LED] WS2812B strip: %d pixels configured (max %d) on GP%d (PIO%d sm%d)\n",
+           led_count(), MAX_PIXELS, LED_STRIP_GPIO, pio_get_index(led_pio), led_sm);
 }
 
 void ledstrip_debug_set_pixel(int pixel, uint8_t r, uint8_t g, uint8_t b) {
@@ -109,7 +125,7 @@ void ledstrip_debug_set_pixel(int pixel, uint8_t r, uint8_t g, uint8_t b) {
     dbg_chase = -1;
     if (pixel < 0) {
         for (auto &px : dbg_px) { px[0] = r; px[1] = g; px[2] = b; }
-    } else if (pixel < PIXEL_COUNT) {
+    } else if (pixel < MAX_PIXELS) {
         dbg_px[pixel][0] = r;
         dbg_px[pixel][1] = g;
         dbg_px[pixel][2] = b;
@@ -160,8 +176,9 @@ void ledstrip_tick() {
     next_frame_us = now + FRAME_INTERVAL_US;
 
     const uint32_t ms = (uint32_t) (now / 1000);
+    const int count = led_count();
 
-    uint8_t frame[PIXEL_COUNT][3] = {}; // all dark, spacers stay that way
+    uint8_t frame[MAX_PIXELS][3] = {}; // all dark; unmapped pixels stay dark
 
     if (dbg_active && now >= dbg_until_us) {
         dbg_active = false; // debug timed out; fall through to normal
@@ -169,79 +186,68 @@ void ledstrip_tick() {
     }
     if (dbg_active) {
         if (dbg_chase >= 0) {
-            const int lit = (int) ((ms / DEBUG_CHASE_MS) % PIXEL_COUNT);
+            const int lit = (int) ((ms / DEBUG_CHASE_MS) % count);
             frame[lit][0] = dbg_chase_rgb[0];
             frame[lit][1] = dbg_chase_rgb[1];
             frame[lit][2] = dbg_chase_rgb[2];
         } else {
-            for (int i = 0; i < PIXEL_COUNT; i++) {
+            for (int i = 0; i < MAX_PIXELS; i++) {
                 frame[i][0] = dbg_px[i][0];
                 frame[i][1] = dbg_px[i][1];
                 frame[i][2] = dbg_px[i][2];
             }
         }
-        for (int i = 0; i < PIXEL_COUNT; i++) {
-            const uint32_t grb = ((uint32_t) shape(frame[i][1]) << 16) |
-                                 ((uint32_t) shape(frame[i][0]) << 8) |
-                                 (uint32_t) shape(frame[i][2]);
-            pio_sm_put_blocking(led_pio, led_sm, grb << 8u);
+    } else {
+        if (sim_any && now >= sim_until_us) {
+            for (auto &s : sim_level) s = 0;
+            sim_any = false;
+            printf("[LED] slot sim timed out, back to live status\n");
         }
-        return;
-    }
 
-    if (sim_any && now >= sim_until_us) {
-        for (auto &s : sim_level) s = 0;
-        sim_any = false;
-        printf("[LED] slot sim timed out, back to live status\n");
-    }
+        for (uint8_t slot = 0; slot < BT_MAX_SLOTS; slot++) {
+            const uint32_t mask = get_config().slot_led_mask[slot];
 
-    for (uint8_t slot = 0; slot < BT_MAX_SLOTS; slot++) {
-        // Simulation overlay: preview this slot's low/critical blink (real
-        // colors and cadence) while the other slots keep live status.
-        if (sim_any && sim_level[slot] != 0) {
-            const bool crit = sim_level[slot] == 2;
-            if (blink_on(ms, crit ? BLINK_RED_MS : BLINK_YELLOW_MS)) {
-                const uint8_t *color = crit ? RED : YELLOW;
-                uint8_t *px = frame[slot_pixel(slot)];
-                px[0] = color[0];
-                px[1] = color[1];
-                px[2] = color[2];
+            // Simulation overlay: preview this slot's low/critical blink
+            // (real colors and cadence) while other slots keep live status.
+            if (sim_any && sim_level[slot] != 0) {
+                const bool crit = sim_level[slot] == 2;
+                if (blink_on(ms, crit ? BLINK_RED_MS : BLINK_YELLOW_MS)) {
+                    paint_mask(frame, mask, count, crit ? RED : YELLOW);
+                }
+                continue;
             }
-            continue;
-        }
 
-        BtStatus st;
-        bt_get_status(slot, &st);
-        if (!st.connected) continue; // off
+            BtStatus st;
+            bt_get_status(slot, &st);
+            if (!st.connected) continue; // off
 
-        // Steady color = the slot's configured color (same as its lightbar).
-        const uint8_t *color = get_config().slot_rgb[slot];
-        bool on = true;
-        // Low-battery blinks only while discharging: a charging pad at 10%
-        // is recovering, not dying, so it shows its steady slot color.
-        if (st.battery_valid && !st.charging) {
-            if (st.battery_pct <= LOW_BATT_RED_PCT) {
-                color = RED;
-                on = blink_on(ms, BLINK_RED_MS);
-            } else if (st.battery_pct <= LOW_BATT_YELLOW_PCT) {
-                color = YELLOW;
-                on = blink_on(ms, BLINK_YELLOW_MS);
+            // Steady color = the slot's configured color (same as its lightbar).
+            const uint8_t *color = get_config().slot_rgb[slot];
+            bool on = true;
+            // Low-battery blinks only while discharging: a charging pad is
+            // recovering, not dying, so it shows its steady slot color.
+            if (st.battery_valid && !st.charging) {
+                if (st.battery_pct <= LOW_BATT_RED_PCT) {
+                    color = RED;
+                    on = blink_on(ms, BLINK_RED_MS);
+                } else if (st.battery_pct <= LOW_BATT_YELLOW_PCT) {
+                    color = YELLOW;
+                    on = blink_on(ms, BLINK_YELLOW_MS);
+                }
             }
-        }
-        if (!on) continue;
+            if (!on) continue;
 
-        uint8_t *px = frame[slot_pixel(slot)];
-        px[0] = color[0];
-        px[1] = color[1];
-        px[2] = color[2];
+            paint_mask(frame, mask, count, color);
+        }
     }
 
-    for (int i = 0; i < PIXEL_COUNT; i++) {
+    // Always push the full MAX so a reduced led_count immediately darkens
+    // pixels past the new end. TX FIFO is joined (8 deep) and drains at
+    // 30 us/pixel; 32 pixels block well under 1 ms per 33 ms frame.
+    for (int i = 0; i < MAX_PIXELS; i++) {
         const uint32_t grb = ((uint32_t) shape(frame[i][1]) << 16) |
                              ((uint32_t) shape(frame[i][0]) << 8) |
                              (uint32_t) shape(frame[i][2]);
-        // TX FIFO is joined (8 deep) and drains at 30 us/pixel; at 8 pixels
-        // per 33 ms frame this never meaningfully blocks.
         pio_sm_put_blocking(led_pio, led_sm, grb << 8u);
     }
 }
