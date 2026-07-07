@@ -25,11 +25,12 @@ constexpr uint16_t CONFIG_VERSION = 5;
 // The RP2350 BOOTSEL/picotool UF2 loader erases the top of flash (the last
 // sector) on download -- even though the UF2 image ends far below it -- so a
 // config kept there is wiped on every reflash while it survives plain reboots.
-// BTstack's TLV bank (which survives reflash in practice) is at
-//   PICO_FLASH_SIZE_BYTES - FLASH_SECTOR_SIZE - PICO_FLASH_BANK_TOTAL_SIZE
-//   = FLASH - 3*sector  (bank is 2 sectors: -3*sector .. -1*sector)
-// so we sit one sector under it at FLASH - 4*sector, still clear of the image
-// (which ends < 1 MB). This is the fix for "config resets on reflash".
+// BTstack's 2-sector TLV bank is relocated for the same reason (the SDK
+// default put its second sector in the bootrom-erased last sector, wiping
+// bonds on every other reflash): CMakeLists defines
+// PICO_FLASH_BANK_STORAGE_OFFSET = FLASH - 3*sector, so the bank occupies
+// sectors -3,-2 and we sit one sector under it at FLASH - 4*sector, still
+// clear of the image (which ends < 1 MB).
 //   Layout (4 MB build): image .. | cfg(-4) | btstack(-3,-2) | bootrom-erased(-1)
 constexpr uint32_t CONFIG_FLASH_OFFSET =
     PICO_FLASH_SIZE_BYTES - 4u * FLASH_SECTOR_SIZE;

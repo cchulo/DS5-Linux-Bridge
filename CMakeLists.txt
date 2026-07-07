@@ -264,6 +264,15 @@ endif ()
 
 target_compile_definitions(ds5-bridge PRIVATE
         MULTI_SLOT_COUNT=${MULTI_SLOT_COUNT}
+        # BTstack's TLV flash bank (link keys / bonds). The SDK default puts
+        # the 2-sector bank in the TOP two sectors -- but the RP2350 bootrom
+        # erases the LAST sector on every BOOTSEL/picotool reflash (the same
+        # quirk that used to wipe the config), so half the bank died on every
+        # other reflash: bonds vanished and pads silently re-paired. Move the
+        # bank down one sector, leaving the last sector sacrificial:
+        #   image .. | cfg(-4) | btstack bank(-3,-2) | bootrom-erased(-1)
+        # One-time effect: bonds stored at the old location are lost once.
+        PICO_FLASH_BANK_STORAGE_OFFSET=\(PICO_FLASH_SIZE_BYTES-3*FLASH_SECTOR_SIZE\)
         CYW43_LWIP=0
         # 0 (not 1): flash_safe_execute() must really park core1 while flash is
         # erased/programmed (config_save). With =1 the lockout is skipped and the
