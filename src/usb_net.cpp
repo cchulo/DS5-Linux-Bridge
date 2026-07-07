@@ -660,13 +660,15 @@ static void apply_slots_post(char *body) {
            last_action_ok ? "OK" : "REJECTED");
 }
 
-// POST /api/led -- form fields: action=set|chase|clear, rgb=RRGGBB,
-// pixel=<n>|all. Drives the LED debug override (auto-reverts after 60 s).
+// POST /api/led -- form fields: action=set|chase|lowbatt|clear, rgb=RRGGBB,
+// pixel=<n>|all, level=yellow|red (lowbatt only). Drives the LED debug
+// override (auto-reverts after 60 s).
 #ifdef ENABLE_LED_STRIP
 static void apply_led_post(char *body) {
     char action[8] = "";
     char rgbhex[8] = "";
     char pixel[8] = "all";
+    char level[8] = "yellow";
     for (char *tok = strtok(body, "&"); tok; tok = strtok(nullptr, "&")) {
         char *eq = strchr(tok, '=');
         if (!eq) continue;
@@ -674,6 +676,7 @@ static void apply_led_post(char *body) {
         if (strcmp(tok, "action") == 0) strncpy(action, eq, sizeof(action) - 1);
         else if (strcmp(tok, "rgb") == 0) strncpy(rgbhex, eq, sizeof(rgbhex) - 1);
         else if (strcmp(tok, "pixel") == 0) strncpy(pixel, eq, sizeof(pixel) - 1);
+        else if (strcmp(tok, "level") == 0) strncpy(level, eq, sizeof(level) - 1);
     }
     uint8_t r = 0, g = 0, b = 0;
     if (strlen(rgbhex) == 6) {
@@ -687,6 +690,9 @@ static void apply_led_post(char *body) {
         ledstrip_debug_set_pixel(strcmp(pixel, "all") == 0 ? -1 : atoi(pixel), r, g, b);
     } else if (strcmp(action, "chase") == 0) {
         ledstrip_debug_chase(r, g, b);
+    } else if (strcmp(action, "lowbatt") == 0) {
+        ledstrip_debug_lowbatt(strcmp(pixel, "all") == 0 ? -1 : atoi(pixel),
+                               strcmp(level, "red") == 0);
     } else if (strcmp(action, "clear") == 0) {
         ledstrip_debug_clear();
     } else {

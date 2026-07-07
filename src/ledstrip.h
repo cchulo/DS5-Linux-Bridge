@@ -40,6 +40,12 @@ void ledstrip_debug_set_pixel(int pixel, uint8_t r, uint8_t g, uint8_t b);
 // Single lit pixel walking the chain in the given color.
 void ledstrip_debug_chase(uint8_t r, uint8_t g, uint8_t b);
 
+// Simulate a low-battery state with the production colors and cadence:
+// critical=false -> yellow blink (<=20%), critical=true -> red blink (<=10%,
+// faster). pixel < 0 applies it to every slot-indicator pixel (spacers stay
+// dark, matching what a real all-pads-dying strip would show).
+void ledstrip_debug_lowbatt(int pixel, bool critical);
+
 // Leave debug mode and resume normal status rendering.
 void ledstrip_debug_clear();
 

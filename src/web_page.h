@@ -176,6 +176,8 @@ Reverts to normal status display automatically after 60&nbsp;s.</div>
   <select id="led_pixel"><option value="all">all pixels</option></select>
   <button id="led_set">Set</button>
   <button id="led_chase">Chase</button>
+  <button id="led_lowy">🟡 Low batt</button>
+  <button id="led_lowr">🔴 Critical</button>
   <button id="led_off">All off</button>
   <button id="led_normal">Normal</button>
   <span id="lstatus"></span>
@@ -402,6 +404,8 @@ async function postLed(body){
 }
 $('led_set').onclick=()=>postLed('action=set&rgb='+$('led_color').value.slice(1)+'&pixel='+$('led_pixel').value);
 $('led_chase').onclick=()=>postLed('action=chase&rgb='+$('led_color').value.slice(1));
+$('led_lowy').onclick=()=>postLed('action=lowbatt&level=yellow&pixel='+$('led_pixel').value);
+$('led_lowr').onclick=()=>postLed('action=lowbatt&level=red&pixel='+$('led_pixel').value);
 $('led_off').onclick=()=>postLed('action=set&rgb=000000&pixel=all');
 $('led_normal').onclick=()=>postLed('action=clear');
 

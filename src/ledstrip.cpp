@@ -59,6 +59,11 @@ uint64_t dbg_until_us = 0;
 int      dbg_chase = -1;
 uint8_t  dbg_chase_rgb[3];
 uint8_t  dbg_px[PIXEL_COUNT][3];
+// Low-battery simulation: -1 off, 0 yellow (<=20%), 1 red/critical (<=10%).
+// Uses the exact production colors and blink cadence so the web UI can
+// preview what a dying pad will look like.
+int      dbg_batt = -1;
+int      dbg_batt_pixel = -1; // <0 = all slot-indicator pixels
 
 // Gamma-correct then apply the global cap.
 inline uint8_t shape(uint8_t v) {
@@ -90,11 +95,12 @@ void ledstrip_init() {
 
 void ledstrip_debug_set_pixel(int pixel, uint8_t r, uint8_t g, uint8_t b) {
     if (!led_ready) return;
-    if (!dbg_active || dbg_chase >= 0) {
+    if (!dbg_active || dbg_chase >= 0 || dbg_batt >= 0) {
         // Entering static debug mode: start from an all-dark canvas.
         for (auto &px : dbg_px) px[0] = px[1] = px[2] = 0;
     }
     dbg_chase = -1;
+    dbg_batt = -1;
     if (pixel < 0) {
         for (auto &px : dbg_px) { px[0] = r; px[1] = g; px[2] = b; }
     } else if (pixel < PIXEL_COUNT) {
@@ -107,9 +113,21 @@ void ledstrip_debug_set_pixel(int pixel, uint8_t r, uint8_t g, uint8_t b) {
     printf("[LED] debug set pixel %d = %u,%u,%u\n", pixel, r, g, b);
 }
 
+void ledstrip_debug_lowbatt(int pixel, bool critical) {
+    if (!led_ready) return;
+    dbg_chase = -1;
+    dbg_batt = critical ? 1 : 0;
+    dbg_batt_pixel = (pixel >= 0 && pixel < PIXEL_COUNT) ? pixel : -1;
+    dbg_active = true;
+    dbg_until_us = time_us_64() + DEBUG_TIMEOUT_US;
+    printf("[LED] debug low-batt sim (%s) pixel %d\n",
+           critical ? "red" : "yellow", pixel);
+}
+
 void ledstrip_debug_chase(uint8_t r, uint8_t g, uint8_t b) {
     if (!led_ready) return;
     dbg_chase = 1;
+    dbg_batt = -1;
     dbg_chase_rgb[0] = r;
     dbg_chase_rgb[1] = g;
     dbg_chase_rgb[2] = b;
@@ -143,6 +161,24 @@ void ledstrip_tick() {
             frame[lit][0] = dbg_chase_rgb[0];
             frame[lit][1] = dbg_chase_rgb[1];
             frame[lit][2] = dbg_chase_rgb[2];
+        } else if (dbg_batt >= 0) {
+            // Same colors/cadence as the real low-battery states below.
+            const uint8_t *color = dbg_batt ? RED : YELLOW;
+            const uint32_t period = dbg_batt ? BLINK_RED_MS : BLINK_YELLOW_MS;
+            if (blink_on(ms, period)) {
+                if (dbg_batt_pixel >= 0) {
+                    frame[dbg_batt_pixel][0] = color[0];
+                    frame[dbg_batt_pixel][1] = color[1];
+                    frame[dbg_batt_pixel][2] = color[2];
+                } else {
+                    for (int s = 0; s < BT_MAX_SLOTS; s++) {
+                        uint8_t *px = frame[slot_pixel(s)];
+                        px[0] = color[0];
+                        px[1] = color[1];
+                        px[2] = color[2];
+                    }
+                }
+            }
         } else {
             for (int i = 0; i < PIXEL_COUNT; i++) {
                 frame[i][0] = dbg_px[i][0];
