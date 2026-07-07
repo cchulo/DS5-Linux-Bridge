@@ -222,8 +222,12 @@ add_subdirectory(lib/opus)
 set(OPUS_RELOC_DIR ${CMAKE_BINARY_DIR}/opus_reloc)
 add_custom_command(
     OUTPUT ${CMAKE_BINARY_DIR}/opus_ram_relocate.stamp
-    # Blanket-relocate all of libopus into RAM.
-    COMMAND ${CMAKE_OBJCOPY} --rename-section .text=.time_critical.opus_text --rename-section .rodata=.time_critical.opus_rodata --rename-section .rodata.str1.4=.time_critical.opus_strings $<TARGET_FILE:opus>
+    # Blanket-relocate libopus code + lookup tables into RAM. String literals
+    # (.rodata.str1.4, ~11 KB of error/assert messages) deliberately stay in
+    # flash: they are never touched on the per-frame audio path, so they cost
+    # zero XIP pressure -- and the heap needs the RAM (see the OOM note in
+    # audio.cpp core1_entry).
+    COMMAND ${CMAKE_OBJCOPY} --rename-section .text=.time_critical.opus_text --rename-section .rodata=.time_critical.opus_rodata $<TARGET_FILE:opus>
     # Then un-relocate the never-executed analysis path back to flash. This is a
     # cmake -P helper (not inline COMMANDs) because the archive member names are
     # not stable across toolchains (.c.obj here vs .c.o in CI), so it must query

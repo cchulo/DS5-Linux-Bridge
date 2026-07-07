@@ -680,7 +680,11 @@ int bt_init() {
     }
 
     for (auto &s : slots) {
-        queue_init(&s.send_fifo, sizeof(send_element), 10);
+        // Depth 8 (was 10): 4 slots x 400 B elements come out of a heap with
+        // single-digit-KB margin next to the opus states (see core1_entry).
+        // Audio to the pad is one ~400 B packet per 10 ms frame, so 8
+        // outstanding is still generous.
+        queue_init(&s.send_fifo, sizeof(send_element), 8);
     }
 
     bt_l2cap_init();
