@@ -193,7 +193,7 @@ footer .kofi:hover{text-decoration:none;opacity:.9}
   </div>
   <div class="hint">⚠️ The Pico can safely power at most <b>8</b> LEDs from
   its own USB supply. For more, power the strip from an external 5&nbsp;V
-  source (sharing ground with the Pico) — only the data line stays on GP28.</div>
+  source — only the data line stays on GP28.</div>
   <div id="led_map" style="margin-top:.6rem"></div>
   <div class="hint">Click the LEDs each slot should light — any shape works
   (line, ring, square…). LEDs are numbered from the first one on the strip.
