@@ -170,6 +170,14 @@ void bt_bond_forget_all();
 // (POST /api/bonds action=pair).
 bool bt_start_pairing();
 
+// True while an explicit pairing window (bt_start_pairing) is open.
+bool bt_pairing_window_open();
+
+// Close an open pairing window (stop the inquiry, restore normal scan
+// policy). No-op when no window is open. Used by the PS+Create controller
+// shortcut; the web UI's window otherwise just times out after 30 s.
+void bt_cancel_pairing();
+
 // If at least one controller is connected, copy the lowest connected slot's
 // address into addr_out (BT_ADDR_LEN bytes) and return true.
 bool bt_connected_addr(uint8_t *addr_out);

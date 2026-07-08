@@ -194,6 +194,14 @@ void on_bt_data(uint8_t slot, CHANNEL_TYPE channel, uint8_t *data,
       static uint64_t combo_since_us[BT_MAX_SLOTS] = {};
       static bool combo_fired[BT_MAX_SLOTS] = {};
       const bool combo = (data[12] & 0x01) && (data[10] & 0x80);
+      if (combo) {
+        // Intercept: these chords belong to the pico, and SteamOS has its
+        // own bindings for them. Mask the buttons out of the report before
+        // it is copied to the USB input buffer below, so the host sees
+        // neither PS nor Triangle while the combo is held.
+        data[10] &= ~0x80;
+        data[12] &= ~0x01;
+      }
       if (!combo) {
         combo_since_us[slot] = 0;
         combo_fired[slot] = false;
@@ -206,6 +214,47 @@ void on_bt_data(uint8_t slot, CHANNEL_TYPE channel, uint8_t *data,
           printf("[Main] PS+Triangle held on slot %u -> controller power off\n",
                  slot);
           bt_slot_power_off(slot);
+        }
+      }
+    }
+
+    // Controller shortcut: PS + Create on the SLOT 1 pad only. Hold ~3 s to
+    // open a pairing window (same as the web UI's "Pair new controller");
+    // if a window is already open, hold ~1 s to cancel it. The fired latch
+    // requires releasing the combo between actions, so opening a window
+    // while still holding can't immediately cancel itself. Raw BT report
+    // offsets: input byte 8 bit 4 = Create (data[11]), byte 9 bit 0 = PS
+    // (data[12]).
+    if (slot == BT_USB_SLOT) {
+      static uint64_t pair_combo_since_us = 0;
+      static bool pair_combo_fired = false;
+      const bool combo = (data[12] & 0x01) && (data[11] & 0x10);
+      if (combo) {
+        // Intercept, same as PS+Triangle above: the host sees neither PS
+        // nor Create while the combo is held.
+        data[11] &= ~0x10;
+        data[12] &= ~0x01;
+      }
+      if (!combo) {
+        pair_combo_since_us = 0;
+        pair_combo_fired = false;
+      } else if (!pair_combo_fired) {
+        const uint64_t now = time_us_64();
+        if (pair_combo_since_us == 0) {
+          pair_combo_since_us = now;
+        } else {
+          const bool window = bt_pairing_window_open();
+          const uint64_t hold_us = window ? 1'000'000 : 3'000'000;
+          if (now - pair_combo_since_us >= hold_us) {
+            pair_combo_fired = true;
+            if (window) {
+              printf("[Main] PS+Create held on slot %u -> cancel pairing\n", slot);
+              bt_cancel_pairing();
+            } else {
+              printf("[Main] PS+Create held on slot %u -> open pairing\n", slot);
+              bt_start_pairing();
+            }
+          }
         }
       }
     }

@@ -433,6 +433,16 @@ bool bt_start_pairing() {
     return true;
 }
 
+bool bt_pairing_window_open() { return pairing_window; }
+
+void bt_cancel_pairing() {
+    if (!pairing_window) return;
+    printf("[BT] Pairing window canceled\n");
+    pairing_window = false;
+    gap_inquiry_stop();
+    bt_update_scan_enable();
+}
+
 // Blink the onboard LED (~2 Hz) while the dongle is looking for new
 // controllers: an explicit pairing window, or no controller bonded yet (the
 // boot inquiry loop). disable_pico_led is a full master switch for the
