@@ -4,6 +4,15 @@
 #   ./docker/build.sh [pico2_w|pico_w|waveshare] [extra cmake args...]
 #
 # Output: build/docker-<variant>/ds5-bridge.uf2
+#
+# BUILD_NAME=<name> keeps a differently-flagged configuration in its own
+# build/docker-<name> directory instead of re-configuring the variant's
+# default one, e.g. a single-slot flavor of the pico2_w board:
+#
+#   BUILD_NAME=ms1 ./docker/build.sh pico2_w -DMULTI_SLOT_COUNT=1
+#
+# The CMake cache remembers the -D flags, so re-running with the same
+# BUILD_NAME (even without flags) rebuilds that configuration incrementally.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -23,7 +32,7 @@ if ! docker image inspect "${IMAGE}" >/dev/null 2>&1; then
     docker build -t "${IMAGE}" "${REPO_DIR}/docker"
 fi
 
-BUILD_DIR="build/docker-${VARIANT}"
+BUILD_DIR="build/docker-${BUILD_NAME:-${VARIANT}}"
 docker run --rm -v "${REPO_DIR}:/work" -w /work "${IMAGE}" bash -c "
     set -euo pipefail
     cmake -S . -B '${BUILD_DIR}' -G Ninja -DCMAKE_BUILD_TYPE=Release ${CMAKE_FLAGS} $*

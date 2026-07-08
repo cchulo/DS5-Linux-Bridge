@@ -180,6 +180,27 @@ Useful options:
 | `ENABLE_BATT_LED` | `ON` | Onboard-LED low-battery blink. |
 | `ENABLE_VERBOSE` | `OFF` | Louder UART logs. |
 
+### Build directories
+
+Every invocation configures and builds in its own `build/docker-<name>`
+directory, and the CMake cache there **remembers the `-D` flags** — so after
+the first configure, re-running the same command (or just
+`cmake --build build/docker-<name>` inside the toolchain image) rebuilds the
+same configuration incrementally. To keep a differently-flagged flavor of
+the same board without clobbering its default directory, name it with
+`BUILD_NAME`.
+
+The configurations maintained in this repo:
+
+| Directory | What it's for | Reproduce with |
+| --- | --- | --- |
+| `build/docker-pico2_w` | **The daily-driver build**: Pico 2 W, 4 controller slots, WS2812B strip on GP28. This is the UF2 to grab for the multi-controller dongle. | `./docker/build.sh pico2_w -DENABLE_LED_STRIP=ON` |
+| `build/docker-ms1` | Single-controller flavor of the same board (`ms1` = multi-slot 1): upstream-like one-pad behavior, no LED strip. For A/B-testing regressions against single-slot behavior. | `BUILD_NAME=ms1 ./docker/build.sh pico2_w -DMULTI_SLOT_COUNT=1` |
+| `build/docker-pico_w` | Pico W (RP2040) board target — no audio. | `./docker/build.sh pico_w` |
+| `build/docker-waveshare` | Waveshare RP2350B-Plus-W board target. | `./docker/build.sh waveshare` |
+
+The flashable image is always `<directory>/ds5-bridge.uf2`.
+
 ### Native
 
 The standard Pico SDK CMake flow also works if you have the toolchain set up
