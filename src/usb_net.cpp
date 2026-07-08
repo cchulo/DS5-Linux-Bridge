@@ -242,6 +242,7 @@ static int json_config(char *out, size_t cap) {
                     "\"led_max\":%u,"
                     "\"led_masks\":[\"%lX\",\"%lX\",\"%lX\",\"%lX\"],"
                     "\"pairing_mask\":\"%lX\","
+                    "\"pairing_rgb\":\"%02X%02X%02X\","
                     "\"disable_player_led_lock\":%u,"
                     "\"max_slots\":%u}",
                     PICO_PROGRAM_VERSION_STRING,
@@ -265,6 +266,7 @@ static int json_config(char *out, size_t cap) {
                     (unsigned long) c.slot_led_mask[2],
                     (unsigned long) c.slot_led_mask[3],
                     (unsigned long) c.pairing_led_mask,
+                    c.pairing_rgb[0], c.pairing_rgb[1], c.pairing_rgb[2],
                     c.disable_player_led_lock,
                     BT_MAX_SLOTS);
 }
@@ -615,6 +617,17 @@ static void apply_post(char *body) {
             if (end && end != eq && *end == '\0') {
                 c.pairing_led_mask = v;
                 c.led_map_valid = 1;
+            }
+        } else if (strcmp(tok, "pairing_rgb") == 0) {
+            // "RRGGBB" (the page strips the '#').
+            if (strlen(eq) == 6) {
+                char *end = nullptr;
+                const uint32_t v = (uint32_t) strtoul(eq, &end, 16);
+                if (end == eq + 6) {
+                    c.pairing_rgb[0] = (uint8_t) (v >> 16);
+                    c.pairing_rgb[1] = (uint8_t) (v >> 8);
+                    c.pairing_rgb[2] = (uint8_t) v;
+                }
             }
         } else if (strncmp(tok, "slot_rgb", 8) == 0 &&
                    tok[8] >= '0' && tok[8] <= '3' && tok[9] == '\0') {

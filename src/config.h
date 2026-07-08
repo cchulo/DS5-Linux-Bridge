@@ -107,6 +107,9 @@ struct __attribute__((packed)) Config_body {
     // alternating layout (0,2,4,6), so pairing lights the gaps between the
     // slot indicators.
     uint32_t pairing_led_mask;
+    // Color of the pairing-mode blink on the strip. All-zero means "unset"
+    // (fresh/migrated config) and defaults to white in config_valid().
+    uint8_t pairing_rgb[3];
 };
 
 struct __attribute__((packed)) Config {

@@ -53,7 +53,6 @@ constexpr float    GAMMA          = 2.2f;
 // #0000FF), matching the pad's lightbar. Warning blinks stay fixed.
 constexpr uint8_t YELLOW[3] = {255, 200, 0};
 constexpr uint8_t RED[3]    = {255, 0, 0};
-constexpr uint8_t WHITE[3]  = {255, 255, 255}; // pairing-mode blink
 
 // Blink cadence (full period; 50% duty). Red blinks faster: it's the
 // "controller is about to die" signal.
@@ -241,13 +240,14 @@ void ledstrip_tick() {
             paint_mask(frame, mask, count, color);
         }
 
-        // Pairing-mode overlay: blink the configured pixels white while the
-        // dongle is searching for a controller (~2 Hz, like the onboard
-        // LED's pairing blink; painted last so it wins shared pixels).
-        // Independent of disable_pico_led -- that switch only covers the
-        // onboard LED.
+        // Pairing-mode overlay: blink the configured pixels in the
+        // configured color (default white) while the dongle is searching
+        // for a controller (~2 Hz, like the onboard LED's pairing blink;
+        // painted last so it wins shared pixels). Independent of
+        // disable_pico_led -- that switch only covers the onboard LED.
         if (bt_pairing_mode_active() && blink_on(ms, 500)) {
-            paint_mask(frame, get_config().pairing_led_mask, count, WHITE);
+            paint_mask(frame, get_config().pairing_led_mask, count,
+                       get_config().pairing_rgb);
         }
     }
 

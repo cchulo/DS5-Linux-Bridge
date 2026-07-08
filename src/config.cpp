@@ -80,6 +80,7 @@ static_assert(offsetof(Config_body, slot_rgb) == 261);
 static_assert(offsetof(Config_body, led_count) == 273);
 static_assert(offsetof(Config_body, disable_player_led_lock) == 291);
 static_assert(offsetof(Config_body, pairing_led_mask) == 292);
+static_assert(offsetof(Config_body, pairing_rgb) == 296);
 static_assert(sizeof(Config_body) <= 320); // keep well inside the 512 B store
 
 // CRC over the first `len` bytes of the body. `len` is the stored size, so an
@@ -178,6 +179,14 @@ void config_valid() {
   if (body->disable_player_led_lock > 1) {
     body->disable_player_led_lock = 0;
     printf("[Config] disable_player_led_lock is invalid\n");
+  }
+  // Pairing blink color: all-zero is "unset" (a black blink is invisible,
+  // never a meaningful choice) -> default white.
+  if (body->pairing_rgb[0] == 0 && body->pairing_rgb[1] == 0 &&
+      body->pairing_rgb[2] == 0) {
+    body->pairing_rgb[0] = 0xff;
+    body->pairing_rgb[1] = 0xff;
+    body->pairing_rgb[2] = 0xff;
   }
   // Legacy in-body version byte, kept in sync with the header for compatibility
   // with older firmware that read it. Not authoritative; the header version is.

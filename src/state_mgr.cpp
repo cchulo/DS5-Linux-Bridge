@@ -294,15 +294,18 @@ void state_update(uint8_t slot, const uint8_t *data, const uint8_t size) {
     }
     bool led_copy = update.AllowLedColor;
 #if BT_MAX_SLOTS > 1
-    // A pure-black host write would turn the lightbar off and erase the
-    // seat's identity; substitute the slot's configured color instead. This
-    // also makes Steam's lightbar override easy to neutralize: set Steam's
-    // controller LED brightness to 0% (it then always sends black) and pads
-    // keep their slot colors. Non-black host colors pass through as usual.
+    // IGNORE pure-black host writes: keep whatever color the lightbar has.
+    // Black arrives in two ways that must both be handled: (a) Steam with
+    // its LED brightness at 0% (the deliberate "stop overriding my slot
+    // colors" trick -- the connect-time slot color survives), and (b) as
+    // don't-care zero filler in reports from writers that only mean to
+    // rumble (e.g. the kernel driver alongside Steam). An earlier version
+    // SUBSTITUTED the slot color on black, and (b) then repainted the slot
+    // color over a color the user had just set in SteamOS. Ignoring black
+    // preserves both: deliberate colors stick, black never darkens a seat.
     // Single-slot builds keep stock upstream behavior.
     if (led_copy && update.LedRed == 0 && update.LedGreen == 0 &&
         update.LedBlue == 0) {
-        state_apply_slot_color(slot);
         led_copy = false;
     }
 #endif
