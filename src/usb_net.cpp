@@ -244,6 +244,8 @@ static int json_config(char *out, size_t cap) {
                     "\"pairing_mask\":\"%lX\","
                     "\"pairing_rgb\":\"%02X%02X%02X\","
                     "\"disable_player_led_lock\":%u,"
+                    "\"disable_lightbar_override\":%u,"
+                    "\"lightbar_filter_rgb\":\"%02X%02X%02X\","
                     "\"max_slots\":%u}",
                     PICO_PROGRAM_VERSION_STRING,
                     c.inactive_time,
@@ -268,6 +270,9 @@ static int json_config(char *out, size_t cap) {
                     (unsigned long) c.pairing_led_mask,
                     c.pairing_rgb[0], c.pairing_rgb[1], c.pairing_rgb[2],
                     c.disable_player_led_lock,
+                    c.disable_lightbar_override,
+                    c.lightbar_filter_rgb[0], c.lightbar_filter_rgb[1],
+                    c.lightbar_filter_rgb[2],
                     BT_MAX_SLOTS);
 }
 
@@ -600,6 +605,19 @@ static void apply_post(char *body) {
             c.webconfig_subnet = (uint8_t) clampi(val, 0, WEBCONFIG_SUBNET_MAX);
         } else if (strcmp(tok, "disable_player_led_lock") == 0) {
             c.disable_player_led_lock = val ? 1 : 0;
+        } else if (strcmp(tok, "disable_lightbar_override") == 0) {
+            c.disable_lightbar_override = val ? 1 : 0;
+        } else if (strcmp(tok, "lightbar_filter_rgb") == 0) {
+            // "RRGGBB" (the page strips the '#').
+            if (strlen(eq) == 6) {
+                char *end = nullptr;
+                const uint32_t v = (uint32_t) strtoul(eq, &end, 16);
+                if (end == eq + 6) {
+                    c.lightbar_filter_rgb[0] = (uint8_t) (v >> 16);
+                    c.lightbar_filter_rgb[1] = (uint8_t) (v >> 8);
+                    c.lightbar_filter_rgb[2] = (uint8_t) v;
+                }
+            }
         } else if (strcmp(tok, "led_count") == 0) {
             c.led_count = (uint8_t) clampi(val, 1, LED_STRIP_MAX_PIXELS);
         } else if (strncmp(tok, "led_mask", 8) == 0 &&

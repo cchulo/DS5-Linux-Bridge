@@ -110,6 +110,16 @@ struct __attribute__((packed)) Config_body {
     // Color of the pairing-mode blink on the strip. All-zero means "unset"
     // (fresh/migrated config) and defaults to white in config_valid().
     uint8_t pairing_rgb[3];
+    // Lightbar override (multi-slot builds): when the host writes exactly
+    // lightbar_filter_rgb to a pad's lightbar, repaint that slot's color
+    // instead (see state_update()). Stored inverted so the migrated/zero
+    // default keeps the override active. With the override disabled, every
+    // host write -- including the filter color -- passes through untouched.
+    uint8_t disable_lightbar_override; // 0 = override active (default), 1 = host controls
+    // Color that triggers the override. Unlike pairing_rgb, all-zero is NOT
+    // "unset" here: black IS the meaningful default (Steam/rumble-only
+    // writers send zero-filled LED bytes).
+    uint8_t lightbar_filter_rgb[3];
 };
 
 struct __attribute__((packed)) Config {

@@ -148,10 +148,24 @@ footer .kofi:hover{text-decoration:none;opacity:.9}
   <div class="ledrow" id="slot_colors" style="margin-top:.2rem"></div>
   <div class="hint">Lightbar and strip LED color per controller slot (default
   blue, like player 1 on a PS5). Battery warnings on the strip still blink
-  yellow/red, and games can still override the lightbar while they run — but
-  a <b>black</b> lightbar write reverts to the slot color. Tip: set Steam's
-  controller LED brightness to 0% and Steam will stop overriding your slot
-  colors.</div>
+  yellow/red, and games can still override the lightbar while they run.</div>
+</div>
+
+<div class="field">
+  <div class="chk">
+    <input type="checkbox" id="lightbar_override">
+    <label for="lightbar_override">Lightbar override: repaint this color with the slot color</label>
+  </div>
+  <div style="display:flex;align-items:center;gap:.6rem;margin-top:.3rem">
+    <span class="hint" style="margin:0">Color to watch for</span>
+    <input type="color" id="lightbar_filter_rgb">
+  </div>
+  <div class="hint">When the PC writes exactly this color (default black) to a
+  controller's lightbar, the dongle shows the slot color instead — this keeps
+  seat colors through Steam's brightness-0% black and the blank colors
+  rumble-only drivers send. Turn it <b>off</b> to give the OS full control of
+  the lightbar (e.g. if Steam Input keeps fighting your colors), including
+  turning it black.</div>
 </div>
 
 <div class="field">
@@ -277,7 +291,7 @@ function bindRange(id,out){const el=$(id);const fn=()=>$(out).textContent=el.val
 const upd=[bindRange('audio_buffer_length','ab_val'),bindRange('inactive_time','it_val')];
 
 function markDirty(){$('save').disabled=false;setStatus('unsaved changes','dirty')}
-['controller_mode','polling_rate_mode','disable_inactive_disconnect','disable_pico_led','player_led_lock','webconfig_subnet']
+['controller_mode','polling_rate_mode','disable_inactive_disconnect','disable_pico_led','player_led_lock','lightbar_override','lightbar_filter_rgb','webconfig_subnet']
   .forEach(id=>$(id).onchange=markDirty);
 function toggleCustomIp(){$('customip_wrap').style.display=$('webconfig_subnet').value==='3'?'':'none'}
 $('webconfig_subnet').addEventListener('change',toggleCustomIp);
@@ -294,6 +308,8 @@ async function load(){
     $('disable_inactive_disconnect').checked=!!c.disable_inactive_disconnect;
     $('disable_pico_led').checked=!!c.disable_pico_led;
     $('player_led_lock').checked=!c.disable_player_led_lock;
+    $('lightbar_override').checked=!c.disable_lightbar_override;
+    if(c.lightbar_filter_rgb)$('lightbar_filter_rgb').value='#'+c.lightbar_filter_rgb.toLowerCase();
     $('webconfig_subnet').value=c.webconfig_subnet;
     if(c.webconfig_custom_ip&&c.webconfig_custom_ip!=='0.0.0.0')
       $('webconfig_custom_ip').value=c.webconfig_custom_ip;
@@ -334,6 +350,8 @@ async function save(){
     'disable_inactive_disconnect='+($('disable_inactive_disconnect').checked?1:0),
     'disable_pico_led='+($('disable_pico_led').checked?1:0),
     'disable_player_led_lock='+($('player_led_lock').checked?0:1),
+    'disable_lightbar_override='+($('lightbar_override').checked?0:1),
+    'lightbar_filter_rgb='+$('lightbar_filter_rgb').value.slice(1),
     'webconfig_subnet='+$('webconfig_subnet').value,
     'webconfig_custom_ip='+encodeURIComponent($('webconfig_custom_ip').value.trim())
   ];

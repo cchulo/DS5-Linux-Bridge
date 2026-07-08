@@ -294,18 +294,21 @@ void state_update(uint8_t slot, const uint8_t *data, const uint8_t size) {
     }
     bool led_copy = update.AllowLedColor;
 #if BT_MAX_SLOTS > 1
-    // IGNORE pure-black host writes: keep whatever color the lightbar has.
-    // Black arrives in two ways that must both be handled: (a) Steam with
-    // its LED brightness at 0% (the deliberate "stop overriding my slot
-    // colors" trick -- the connect-time slot color survives), and (b) as
-    // don't-care zero filler in reports from writers that only mean to
-    // rumble (e.g. the kernel driver alongside Steam). An earlier version
-    // SUBSTITUTED the slot color on black, and (b) then repainted the slot
-    // color over a color the user had just set in SteamOS. Ignoring black
-    // preserves both: deliberate colors stick, black never darkens a seat.
-    // Single-slot builds keep stock upstream behavior.
-    if (led_copy && update.LedRed == 0 && update.LedGreen == 0 &&
-        update.LedBlue == 0) {
+    // Lightbar override (config; web UI "Lights"). When active and the host
+    // writes exactly the filter color (default black), repaint the slot
+    // color instead, so the seat keeps its identity through Steam's
+    // brightness-0% black and the zero-filled LED bytes rumble-only writers
+    // send. The filter color is configurable because Steam Input can also
+    // spray a specific non-black color; matching it maps that back to the
+    // slot color too. When disabled, every host write -- including the
+    // filter color -- passes through verbatim and the OS fully owns the
+    // lightbar. Single-slot builds keep stock upstream behavior.
+    const Config_body &cfg = get_config();
+    if (led_copy && !cfg.disable_lightbar_override &&
+        update.LedRed == cfg.lightbar_filter_rgb[0] &&
+        update.LedGreen == cfg.lightbar_filter_rgb[1] &&
+        update.LedBlue == cfg.lightbar_filter_rgb[2]) {
+        state_apply_slot_color(slot);
         led_copy = false;
     }
 #endif

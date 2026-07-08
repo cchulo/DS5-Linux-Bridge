@@ -81,6 +81,8 @@ static_assert(offsetof(Config_body, led_count) == 273);
 static_assert(offsetof(Config_body, disable_player_led_lock) == 291);
 static_assert(offsetof(Config_body, pairing_led_mask) == 292);
 static_assert(offsetof(Config_body, pairing_rgb) == 296);
+static_assert(offsetof(Config_body, disable_lightbar_override) == 299);
+static_assert(offsetof(Config_body, lightbar_filter_rgb) == 300);
 static_assert(sizeof(Config_body) <= 320); // keep well inside the 512 B store
 
 // CRC over the first `len` bytes of the body. `len` is the stored size, so an
@@ -188,6 +190,12 @@ void config_valid() {
     body->pairing_rgb[1] = 0xff;
     body->pairing_rgb[2] = 0xff;
   }
+  if (body->disable_lightbar_override > 1) {
+    body->disable_lightbar_override = 0;
+    printf("[Config] disable_lightbar_override is invalid\n");
+  }
+  // lightbar_filter_rgb needs no check: every value is valid, and the all-zero
+  // default (black) is itself the intended out-of-box filter color.
   // Legacy in-body version byte, kept in sync with the header for compatibility
   // with older firmware that read it. Not authoritative; the header version is.
   body->config_version = CONFIG_VERSION;
