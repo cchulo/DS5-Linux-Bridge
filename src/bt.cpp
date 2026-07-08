@@ -381,12 +381,17 @@ static int bt_bond_count() {
 // Recovery/looping restart of inquiry. Gated on bond presence: with a controller
 // bonded we keep the radio connectable for page-scan reconnect but do NOT
 // re-open inquiry, so a transient failure can't silently reopen pairing.
+// EXCEPT while an explicit pairing window is open: every connect-failure
+// recovery path (create-connection rejected, ACL connect failed, pre-ACL
+// watchdog) lands here, and skipping the restart then left a zombie window --
+// pairing LED blinking, no inquiry running, and no inquiry-complete event
+// ever coming to close it.
 static void bt_restart_inquiry() {
     device_found = false;
     new_pair = false;
     connect_attempt_started = 0;
     bt_update_scan_enable();
-    if (bt_has_stored_link_key()) {
+    if (!pairing_window && bt_has_stored_link_key()) {
         printf("[BT] Stored controller -> page scan, skip inquiry restart\n");
         return;
     }
@@ -1259,9 +1264,15 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                 } else if (psm == PSM_HID_INTERRUPT) {
                     printf("[L2CAP] HID Interrupt opened cid=0x%04X (slot %d)\n", local_cid, slot_index(s));
                     s->interrupt_cid = local_cid;
-                    // A controller is fully connected -- close any open pairing
-                    // window so bonded controllers can auto-reconnect again.
-                    pairing_window = false;
+                    // The NEWLY PAIRED controller is fully connected -- the
+                    // pairing window did its job, close it. Gated on new_pair:
+                    // an already-bonded pad auto-reconnecting mid-window must
+                    // not steal the window from the pad the user is actively
+                    // holding in pairing mode (that read as a random dropout).
+                    if (s->new_pair && pairing_window) {
+                        pairing_window = false;
+                        printf("[L2CAP] Pairing window closed (new controller connected)\n");
+                    }
                     // Successful pair removes this MAC from the blacklist -- an
                     // explicit PS+Share re-pair is the user un-forgetting it.
                     bt_blacklist_remove(s->addr);
