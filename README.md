@@ -238,6 +238,91 @@ you need to measure. Diagnostic output goes to **UART0** instead:
 
 ---
 
+## 3D-printed case mount
+
+[openscad/](openscad/) contains a printable bracket
+([pico_25_bracket.scad](openscad/pico_25_bracket.scad), with a ready-to-slice
+[STL](openscad/pico_25_bracket.stl)) that mounts the Pico inside a PC case
+using a standard **2.5" drive (SFF-8201) bottom mounting pattern** — designed
+around a Fractal panel, but the footprint fits any 2.5" bay:
+
+- The plate screws to the inside of the case's inner sheet via **M3×4×5
+  heat-set inserts**; the Pico sits on standoffs on the outward face and pokes
+  through the panel opening, its PCB top landing flush with the panel's outer
+  relief surface.
+- The Pico screws down with **M2 screws into M2×4×3.2 heat-set inserts** in
+  the standoff tips.
+- The I-shaped side cutouts leave the sides open so the LED-strip wires and
+  DuPont connectors tuck behind the bracket.
+- Sheet thickness, relief depth, insert bores, and the Pico's position are
+  all parameters at the top of the `.scad` file — print flat face down
+  (standoffs and insert holes up).
+
+> **Known limitation:** the bracket doesn't yet leave clearance for a thick
+> micro-USB cable — the current design assumes a slim plug. A future revision
+> needs to accommodate bulkier cable housings.
+
+---
+
+## Build gallery
+
+From breadboard prototype to a dongle mounted in the PC case.
+
+<table>
+  <tr>
+    <td width="50%">
+      <img src="docs/images/IMG_5915.jpeg" alt="Breadboard prototype with two DualSense controllers connected" width="100%"><br>
+      <sub>Early breadboard prototype driving two DualSense controllers at once, with the WS2812B strip showing slot status.</sub>
+    </td>
+    <td width="50%">
+      <img src="docs/images/IMG_5931.jpeg" alt="Soldering the WS2812B strip under a magnifier" width="100%"><br>
+      <sub>Soldering leads onto a short WS2812B strip segment.</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%">
+      <img src="docs/images/IMG_5937.jpeg" alt="Finished three-wire harness for the LED strip" width="100%"><br>
+      <sub>The finished strip harness — 5&nbsp;V, ground, and GP28 data, heat-shrunk to jumper connectors.</sub>
+    </td>
+    <td width="50%">
+      <img src="docs/images/IMG_5938.jpeg" alt="Close-up of the heat-shrunk solder joints" width="100%"><br>
+      <sub>Close-up of the solder joints before the final heat-shrink pass.</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%">
+      <img src="docs/images/preview_top.png" alt="OpenSCAD render of the mounting bracket" width="100%"><br>
+      <sub>OpenSCAD render of the <a href="openscad/pico_25_bracket.scad">case-mount bracket</a>.</sub>
+    </td>
+    <td width="50%">
+      <img src="docs/images/IMG_5939.jpeg" alt="3D-printed bracket with heat-set inserts" width="100%"><br>
+      <sub>The printed bracket with the brass heat-set inserts installed.</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%">
+      <img src="docs/images/IMG_5940.jpeg" alt="Pico 2 W and LED strip assembled on the bracket" width="100%"><br>
+      <sub>Pico 2&nbsp;W and the strip assembled onto the bracket.</sub>
+    </td>
+    <td width="50%">
+      <img src="docs/images/IMG_5942.jpeg" alt="Assembled bridge powered on with the LED strip lit" width="100%"><br>
+      <sub>First power-on of the assembled unit — slot LEDs lit in the default blue.</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%">
+      <img src="docs/images/IMG_5944.jpeg" alt="Bridge mounted inside the PC case" width="100%"><br>
+      <sub>Mounted to the case's 2.5" drive pattern, wired to an internal USB port.</sub>
+    </td>
+    <td width="50%">
+      <img src="docs/images/IMG_5945.jpeg" alt="Close-up of the Pico 2 W visible through the case panel" width="100%"><br>
+      <sub>The Pico 2&nbsp;W poking through the panel opening, flush with the outer surface.</sub>
+    </td>
+  </tr>
+</table>
+
+---
+
 ## Credits & License
 
 This fork stands on two projects' shoulders:
