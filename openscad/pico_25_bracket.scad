@@ -1,73 +1,85 @@
 // ============================================================
-// Raspberry Pi Pico -> 2.5" drive mount, Fractal panel version
-// (DS5Dongle) - bracket screws to the INSIDE of the case's 1mm
-// inner sheet using the 2.5" SSD bottom-mount pattern; the Pico
-// mounts on the OUTWARD face, poking through the panel opening,
-// with its PCB top flush with the outer relief surface.
+// Raspberry Pi Pico -> 2.5" drive mount, "window" version, v3
+// (DS5Dongle, Fractal Ridge front panel)
 //
-// Height stack from the bracket's mounting face:
-//   1.0 inner sheet + 2.0 relief depth = 3.0 to outer surface
-//   standoff protrusion = 3.0 - 1.0 (PCB) = 2.0mm
-//   -> PCB top lands exactly on the relief plane
+// Full rectangular plate. Mounts to the case inner sheet via
+// M3 x 4 x 5 inserts (SFF-8201 bottom pattern). Pico mounts
+// UPSIDE-DOWN against the interior face: component side toward
+// the plate, exposed through the window; USB plug + cable exit
+// through an open-ended channel (roofed by the case sheet).
 //
-// Pico: M2 screws into M2 x 4 x 3.2 inserts in the standoff tips.
-// Case: M3 screws into M3 x 4 x 5 inserts in the mounting face.
+// FOUR M2 x 4 x 3.2 insert points - no posts. The board seats
+// on four low 2mm pads that are solid extensions of the plate;
+// each bore runs up through pad + plate (6.6mm of material
+// around a 4.4mm bore). Pin stubs on the component face hang
+// in the 2mm air gap; the jack pokes into the channel neck.
+// All four screws: M2 x 6.
 //
-// Print flat face down (standoffs up - also the insert side up).
+// NOTE: at the USB end the bore wall toward the channel neck is
+// ~0.2mm - it prints as a fused perimeter and may bulge a hair
+// into the neck when heat-setting; harmless, jack still clears.
+// NOTE: the LED sits under solid plate (not visible); BOOTSEL
+// is in the window.
+//
+// Print mounting face down. No supports needed.
 // ============================================================
 
 /* ---------- Parameters ---------- */
 
-// 2.5" drive footprint (SFF-8201 bottom pattern)
 drive_len       = 100.0;
 drive_wid       = 69.85;
-plate_t         = 5.0;     // thick enough for the M3 inserts
+plate_t         = 5.0;
+cut_r           = 3.0;
 
-// Case geometry
-sheet_t         = 1.0;     // inner sheet thickness
-relief_depth    = 2.0;     // recess depth from sheet to outer surface
-grommet_offset  = 0.0;     // extra gap if rubber grommets hold the
-                           // bracket off the sheet - measure & set
-
-// Bottom mounting holes: M3 x 4 x 5 heat-set inserts, pressed
-// into the mounting face; case screws come through the sheet.
+// M3 x 4 x 5 inserts (case screws come through the sheet)
 bot_hole_x      = [14.0, 90.6];
-bot_hole_inset  = 4.065;               // 61.72mm apart across width
-m3_insert_hole  = 4.7;                 // for OD 5.0 insert (try 4.6 if loose)
+bot_hole_inset  = 4.065;
+m3_insert_hole  = 4.7;
 m3_insert_len   = 4.0;
 
-// Raspberry Pi Pico
+// Raspberry Pi Pico, upside-down on the interior face
 pico_len        = 51.0;
-pico_wid        = 21.0;
-pico_pcb_t      = 1.0;
 pico_hole_dx    = 47.0;
 pico_hole_dy    = 11.4;
-pico_x_offset   = 0.0;                 // shift from center along length
-pico_y_offset   = 0.0;                 // shift from center across width
+pico_x_offset   = 0.0;
+pico_y_offset   = 0.0;
+usb_end_high_x  = true;    // jack toward the x=100 end
 
-// I-shape cutouts: open sides between the end bands so wires
-// and dupont connectors tuck behind the bracket
-band_w          = 22.0;    // solid band at each end (covers M3 inserts)
-spine_w         = 25.0;    // center spine width (covers Pico + standoffs)
-cut_r           = 3.0;     // corner radius of the cutouts
+// Board seat pads (solid part of the plate)
+pad_h           = 2.0;     // air gap under the board (> pin stubs)
+pad_len         = 6.0;     // pad size along x
+pad_in          = 4.0;     // pad inner face (= channel neck wall)
+pad_out         = 8.0;     // pad outer face (clears pin rows at 8.25)
 
-// M2 x 4 x 3.2 heat-set inserts
-insert_hole_d   = 3.0;                 // for OD 3.2 insert (try 2.9 if loose)
+// M2 x 4 x 3.2 inserts
+insert_hole_d   = 3.0;
 insert_len      = 4.0;
-standoff_d      = 6.0;                 // wall around the insert
+
+// Window + USB channel
+window_hw       = 9.5;
+neck_hw         = 4.0;     // channel neck over the jack (plug nose ~6.9mm)
+chan_hw         = 6.0;     // main channel (plug body ~11mm)
 
 $fn = 48;
 
 /* ---------- Derived ---------- */
-protrusion = sheet_t + relief_depth + grommet_offset - pico_pcb_t;  // = 2.0
 mid_y      = drive_wid / 2 + pico_y_offset;
-pico_x1    = (drive_len - pico_len)/2 + pico_x_offset;   // centered
-hole_xs    = [pico_x1 + (pico_len - pico_hole_dx)/2,
-              pico_x1 + (pico_len + pico_hole_dx)/2];
+bx0        = (drive_len - pico_len)/2 + pico_x_offset;
+bx1        = bx0 + pico_len;
+usb_x      = usb_end_high_x ? bx1 : bx0;
+sgn        = usb_end_high_x ? 1 : -1;
+ant_hole_x = usb_x - sgn * (2 + pico_hole_dx);   // 2mm from each board end
+usb_hole_x = usb_x - sgn * 2;
 hole_ys    = [mid_y - pico_hole_dy/2, mid_y + pico_hole_dy/2];
 bot_hole_y = [bot_hole_inset, drive_wid - bot_hole_inset];
 
-// Rounded-corner cutout helper
+win_a   = ant_hole_x + sgn * 2.0;                // past antenna pads
+win_b   = usb_hole_x - sgn * 3.6;                // before USB pads
+wx0     = min(win_a, win_b);  wx1 = max(win_a, win_b);
+nk_a    = win_b;  nk_b = usb_x + sgn * 1.6;      // neck spans the jack
+ch_a    = nk_b - sgn * 0.5;                      // main channel to the end
+ch_b    = usb_end_high_x ? drive_len + 10 : -10;
+
 module rounded_slot(x0, y0, x1, y1, r, h) {
     hull()
         for (cx = [x0 + r, x1 - r], cy = [y0 + r, y1 - r])
@@ -75,38 +87,44 @@ module rounded_slot(x0, y0, x1, y1, r, h) {
 }
 
 /* ---------- Main ----------
-   z=0..plate_t is the plate; z=plate_t is the MOUNTING face
-   (contacts the inner sheet); standoffs rise past it.        */
+   z 0..plate_t = plate; z = plate_t = mounting face (on sheet);
+   interior side is z < 0. Board component face seats at -pad_h. */
 difference() {
     union() {
         cube([drive_len, drive_wid, plate_t]);
 
-        // Standoffs protruding past the mounting face, through
-        // the panel opening; Pico screws down onto their tips.
-        for (x = hole_xs, y = hole_ys)
-            translate([x, y, plate_t])
-                cylinder(d = standoff_d, h = protrusion);
+        // Four board seat pads, solid with the plate above them
+        for (hx = [ant_hole_x, usb_hole_x], sy = [-1, 1])
+            translate([hx - pad_len/2,
+                       mid_y + (sy > 0 ? pad_in : -pad_out),
+                       -pad_h])
+                cube([pad_len, pad_out - pad_in, pad_h + 0.01]);
     }
 
-    // I-shape side cutouts (extend past the edges -> open sides)
-    for (sy = [-1, 1]) {
-        y_in  = mid_y + sy * spine_w/2;               // spine edge
-        y_out = sy > 0 ? drive_wid + 10 : -10;        // beyond plate edge
-        rounded_slot(band_w, min(y_in, y_out),
-                     drive_len - band_w, max(y_in, y_out),
-                     cut_r, plate_t + 10);
-    }
+    // Front window exposing the Pico's component face
+    rounded_slot(wx0, mid_y - window_hw, wx1, mid_y + window_hw,
+                 cut_r, plate_t);
 
-    // M3 insert bores (blind from the mounting face, 0.6mm floor)
+    // Channel neck over the jack (between the USB pads)
+    rounded_slot(min(nk_a, nk_b) - 2, mid_y - neck_hw,
+                 max(nk_a, nk_b) + 2, mid_y + neck_hw,
+                 2.0, plate_t);
+
+    // Main cable channel, open out the end of the bracket
+    rounded_slot(min(ch_a, ch_b), mid_y - chan_hw,
+                 max(ch_a, ch_b), mid_y + chan_hw,
+                 cut_r, plate_t);
+
+    // M3 insert bores (blind from the mounting face)
     for (x = bot_hole_x, y = bot_hole_y)
         translate([x, y, plate_t - (m3_insert_len + 0.4)]) {
             cylinder(d = m3_insert_hole, h = m3_insert_len + 0.41);
             translate([0, 0, m3_insert_len - 0.09])
-                cylinder(d1 = m3_insert_hole, d2 = m3_insert_hole + 1.0, h = 0.5); // lead-in
+                cylinder(d1 = m3_insert_hole, d2 = m3_insert_hole + 1.0, h = 0.5);
         }
 
-    // Heat-set insert holes in the standoff tips (blind, 0.6mm floor)
-    for (x = hole_xs, y = hole_ys)
-        translate([x, y, plate_t + protrusion - (insert_len + 0.4)])
+    // M2 insert bores through the pads into the plate
+    for (hx = [ant_hole_x, usb_hole_x], y = hole_ys)
+        translate([hx, y, -pad_h - 0.01])
             cylinder(d = insert_hole_d, h = insert_len + 0.41);
 }
