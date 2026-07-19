@@ -795,10 +795,12 @@ static void apply_slots_post(char *body) {
            last_action_ok ? "OK" : "REJECTED");
 }
 
-// POST /api/led -- form fields: action=set|chase|sim|clear, rgb=RRGGBB,
-// pixel=<n>|all, and for sim: slot=<n>|all, level=normal|low|critical
-// (per-slot battery-state preview overlaid on live status). Drives the LED
-// debug override (auto-reverts after 60 s).
+// POST /api/led -- form fields: action=set|chase|sim|pairsim|clear,
+// rgb=RRGGBB, pixel=<n>|all, for sim: slot=<n>|all,
+// level=normal|connected|low|critical (per-slot state preview overlaid on
+// live status), and for pairsim: state=on|off (forces the pairing blink
+// without touching the radio). Drives the LED debug override (auto-reverts
+// after 60 s).
 #ifdef ENABLE_LED_STRIP
 static void apply_led_post(char *body) {
     char action[8] = "";
@@ -806,6 +808,7 @@ static void apply_led_post(char *body) {
     char pixel[8] = "all";
     char slot[8] = "all";
     char level[12] = "";
+    char state[8] = "";
     for (char *tok = strtok(body, "&"); tok; tok = strtok(nullptr, "&")) {
         char *eq = strchr(tok, '=');
         if (!eq) continue;
@@ -815,6 +818,7 @@ static void apply_led_post(char *body) {
         else if (strcmp(tok, "pixel") == 0) strncpy(pixel, eq, sizeof(pixel) - 1);
         else if (strcmp(tok, "slot") == 0) strncpy(slot, eq, sizeof(slot) - 1);
         else if (strcmp(tok, "level") == 0) strncpy(level, eq, sizeof(level) - 1);
+        else if (strcmp(tok, "state") == 0) strncpy(state, eq, sizeof(state) - 1);
     }
     uint8_t r = 0, g = 0, b = 0;
     if (strlen(rgbhex) == 6) {
@@ -833,11 +837,16 @@ static void apply_led_post(char *body) {
         if (strcmp(level, "normal") == 0) lvl = 0;
         else if (strcmp(level, "low") == 0) lvl = 1;
         else if (strcmp(level, "critical") == 0) lvl = 2;
+        else if (strcmp(level, "connected") == 0) lvl = 3;
         if (lvl < 0) {
             last_action_ok = false;
         } else {
             ledstrip_debug_slot_sim(strcmp(slot, "all") == 0 ? -1 : atoi(slot), lvl);
         }
+    } else if (strcmp(action, "pairsim") == 0) {
+        if (strcmp(state, "on") == 0) ledstrip_debug_pairing_sim(true);
+        else if (strcmp(state, "off") == 0) ledstrip_debug_pairing_sim(false);
+        else last_action_ok = false;
     } else if (strcmp(action, "clear") == 0) {
         ledstrip_debug_clear();
     } else {

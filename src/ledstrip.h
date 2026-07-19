@@ -42,12 +42,19 @@ void ledstrip_debug_set_pixel(int pixel, uint8_t r, uint8_t g, uint8_t b);
 // Single lit pixel walking the chain in the given color.
 void ledstrip_debug_chase(uint8_t r, uint8_t g, uint8_t b);
 
-// Per-slot battery-state simulation, overlaid on the LIVE status display
-// (other slots keep showing their real state). level: 0 = back to live,
-// 1 = low (yellow blink, as at <=40%), 2 = critical (red blink, as at
-// <=20%). slot < 0 applies the level to every slot. Same 60 s auto-revert
-// as the other debug modes; ledstrip_debug_clear() also clears it.
+// Per-slot state simulation, overlaid on the LIVE status display (other
+// slots keep showing their real state). level: 0 = back to live, 1 = low
+// (yellow blink, as at <=40%), 2 = critical (red blink, as at <=20%),
+// 3 = connected (steady slot color, as with a pad attached). slot < 0
+// applies the level to every slot. Same 60 s auto-revert as the other
+// debug modes; ledstrip_debug_clear() also clears it.
 void ledstrip_debug_slot_sim(int slot, int level);
+
+// Simulate pairing mode: forces the pairing overlay (configured pixels
+// blinking in the pairing color) without touching the radio, so the blink
+// can be previewed while programming the strip layout. Same 60 s
+// auto-revert; ledstrip_debug_clear() also clears it.
+void ledstrip_debug_pairing_sim(bool on);
 
 // Leave debug mode and resume normal status rendering.
 void ledstrip_debug_clear();

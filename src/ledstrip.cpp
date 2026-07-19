@@ -79,14 +79,21 @@ uint64_t dbg_until_us = 0;
 int      dbg_chase = -1;
 uint8_t  dbg_chase_rgb[3];
 uint8_t  dbg_px[MAX_PIXELS][3];
-// Per-slot low-battery simulation overlay: 0 = live status, 1 = low
-// (yellow blink), 2 = critical (red blink). Unlike the global debug modes
-// above, this overlays the NORMAL rendering, so one slot can preview a dying
-// pad while the others keep showing their real state. Uses the exact
-// production colors and cadence.
+// Per-slot simulation overlay: 0 = live status, 1 = low battery (yellow
+// blink), 2 = critical (red blink), 3 = connected (steady slot color).
+// Unlike the global debug modes above, this overlays the NORMAL rendering,
+// so one slot can preview a state while the others keep showing their real
+// state. Uses the exact production colors and cadence. sim_pairing likewise
+// forces the pairing overlay without touching the radio.
 uint8_t  sim_level[BT_MAX_SLOTS] = {};
+bool     sim_pairing = false;
 bool     sim_any = false;
 uint64_t sim_until_us = 0;
+
+inline void sim_recompute_any() {
+    sim_any = sim_pairing;
+    for (auto s : sim_level) sim_any |= (s != 0);
+}
 
 // Gamma-correct then apply the global cap.
 inline uint8_t shape(uint8_t v) {
@@ -137,7 +144,7 @@ void ledstrip_debug_set_pixel(int pixel, uint8_t r, uint8_t g, uint8_t b) {
 
 void ledstrip_debug_slot_sim(int slot, int level) {
     if (!led_ready) return;
-    if (level < 0 || level > 2) return;
+    if (level < 0 || level > 3) return;
     if (slot < 0) {
         for (auto &s : sim_level) s = (uint8_t) level;
     } else if (slot < BT_MAX_SLOTS) {
@@ -145,10 +152,17 @@ void ledstrip_debug_slot_sim(int slot, int level) {
     } else {
         return;
     }
-    sim_any = false;
-    for (auto s : sim_level) sim_any |= (s != 0);
+    sim_recompute_any();
     sim_until_us = time_us_64() + DEBUG_TIMEOUT_US;
     printf("[LED] debug slot sim: slot %d level %d\n", slot, level);
+}
+
+void ledstrip_debug_pairing_sim(bool on) {
+    if (!led_ready) return;
+    sim_pairing = on;
+    sim_recompute_any();
+    sim_until_us = time_us_64() + DEBUG_TIMEOUT_US;
+    printf("[LED] debug pairing sim: %s\n", on ? "on" : "off");
 }
 
 void ledstrip_debug_chase(uint8_t r, uint8_t g, uint8_t b) {
@@ -165,6 +179,7 @@ void ledstrip_debug_chase(uint8_t r, uint8_t g, uint8_t b) {
 void ledstrip_debug_clear() {
     dbg_active = false;
     for (auto &s : sim_level) s = 0;
+    sim_pairing = false;
     sim_any = false;
     printf("[LED] debug cleared\n");
 }
@@ -200,6 +215,7 @@ void ledstrip_tick() {
     } else {
         if (sim_any && now >= sim_until_us) {
             for (auto &s : sim_level) s = 0;
+            sim_pairing = false;
             sim_any = false;
             printf("[LED] slot sim timed out, back to live status\n");
         }
@@ -207,12 +223,17 @@ void ledstrip_tick() {
         for (uint8_t slot = 0; slot < BT_MAX_SLOTS; slot++) {
             const uint32_t mask = get_config().slot_led_mask[slot];
 
-            // Simulation overlay: preview this slot's low/critical blink
-            // (real colors and cadence) while other slots keep live status.
+            // Simulation overlay: preview this slot's state (real colors and
+            // cadence) while other slots keep live status. 3 = connected
+            // (steady slot color), 1/2 = low/critical battery blink.
             if (sim_any && sim_level[slot] != 0) {
-                const bool crit = sim_level[slot] == 2;
-                if (blink_on(ms, crit ? BLINK_RED_MS : BLINK_YELLOW_MS)) {
-                    paint_mask(frame, mask, count, crit ? RED : YELLOW);
+                if (sim_level[slot] == 3) {
+                    paint_mask(frame, mask, count, get_config().slot_rgb[slot]);
+                } else {
+                    const bool crit = sim_level[slot] == 2;
+                    if (blink_on(ms, crit ? BLINK_RED_MS : BLINK_YELLOW_MS)) {
+                        paint_mask(frame, mask, count, crit ? RED : YELLOW);
+                    }
                 }
                 continue;
             }
@@ -245,7 +266,8 @@ void ledstrip_tick() {
         // for a controller (~2 Hz, like the onboard LED's pairing blink;
         // painted last so it wins shared pixels). Independent of
         // disable_pico_led -- that switch only covers the onboard LED.
-        if (bt_pairing_mode_active() && blink_on(ms, 500)) {
+        if ((bt_pairing_mode_active() || (sim_any && sim_pairing)) &&
+            blink_on(ms, 500)) {
             paint_mask(frame, get_config().pairing_led_mask, count,
                        get_config().pairing_rgb);
         }

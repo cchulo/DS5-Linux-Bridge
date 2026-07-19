@@ -64,6 +64,11 @@ select.mv{width:auto;font-size:.72rem;padding:.1rem .3rem;background:#252525;bor
 #led_dbg button{margin-top:0;padding:.4rem .9rem;font-size:.85rem;background:#3a3a3a}
 .ledrow{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-top:.6rem}
 .ledrow .ledlbl{color:#888;font-size:.85rem;min-width:6.5rem}
+/* Label + wrapping control group: overflowing buttons wrap within the
+   control column instead of dropping below the label. */
+.ledrow.ctl{flex-wrap:nowrap;align-items:flex-start}
+.ledrow.ctl .ledlbl{flex:none;padding-top:.45rem}
+.lctl{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;flex:1;min-width:0}
 .ledmaprow{display:flex;align-items:center;gap:.3rem;margin:.3rem 0;flex-wrap:wrap}
 .ledmaprow .mlbl{color:#888;font-size:.75rem;min-width:3.2rem}
 .ledcell{width:1.2rem;height:1.2rem;border-radius:50%;border:1px solid #444;background:#222;cursor:pointer;font-size:.55rem;color:#666;display:inline-flex;align-items:center;justify-content:center;user-select:none}
@@ -207,20 +212,32 @@ footer .kofi:hover{text-decoration:none;opacity:.9}
   <label class="lbl">LED debug</label>
   <div class="hint">Drives the WS2812B strip directly (still brightness-capped).
   Everything reverts to the live status display automatically after 60&nbsp;s.</div>
-  <div class="ledrow">
+  <div class="ledrow ctl">
     <span class="ledlbl">Simulate slot</span>
-    <select id="led_slot"></select>
-    <button id="led_sim_low">Low battery</button>
-    <button id="led_sim_crit">Critical</button>
-    <button id="led_sim_norm">Normal</button>
+    <span class="lctl">
+      <select id="led_slot"></select>
+      <button id="led_sim_conn">Connected</button>
+      <button id="led_sim_low">Low battery</button>
+      <button id="led_sim_crit">Critical</button>
+      <button id="led_sim_norm">Normal</button>
+    </span>
   </div>
-  <div class="ledrow">
+  <div class="ledrow ctl">
+    <span class="ledlbl">Pairing</span>
+    <span class="lctl">
+      <button id="led_sim_pair">Simulate pairing</button>
+      <button id="led_sim_pair_off">Stop</button>
+    </span>
+  </div>
+  <div class="ledrow ctl">
     <span class="ledlbl">Whole strip</span>
-    <input type="color" id="led_color" value="#0000ff">
-    <button id="led_chase">Chase</button>
-    <button id="led_off">All off</button>
-    <button id="led_normal">All normal</button>
-    <span id="lstatus"></span>
+    <span class="lctl">
+      <input type="color" id="led_color" value="#0000ff">
+      <button id="led_chase">Chase</button>
+      <button id="led_off">All off</button>
+      <button id="led_normal">All normal</button>
+      <span id="lstatus"></span>
+    </span>
   </div>
 </div>
 </div>
@@ -656,9 +673,12 @@ async function postLed(body){
     st.className=r.ok?'ok':'err';st.textContent=r.ok?'✓':'failed';
   }catch(e){st.className='err';st.textContent='failed'}
 }
+$('led_sim_conn').onclick=()=>postLed('action=sim&slot='+$('led_slot').value+'&level=connected');
 $('led_sim_low').onclick=()=>postLed('action=sim&slot='+$('led_slot').value+'&level=low');
 $('led_sim_crit').onclick=()=>postLed('action=sim&slot='+$('led_slot').value+'&level=critical');
 $('led_sim_norm').onclick=()=>postLed('action=sim&slot='+$('led_slot').value+'&level=normal');
+$('led_sim_pair').onclick=()=>postLed('action=pairsim&state=on');
+$('led_sim_pair_off').onclick=()=>postLed('action=pairsim&state=off');
 $('led_chase').onclick=()=>postLed('action=chase&rgb='+$('led_color').value.slice(1));
 $('led_off').onclick=()=>postLed('action=set&rgb=000000&pixel=all');
 $('led_normal').onclick=()=>postLed('action=clear');
