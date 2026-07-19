@@ -39,6 +39,7 @@
 
 #include "bt.h"
 #include "tier.h"
+#include "usb.h"
 #ifdef ENABLE_LED_STRIP
 #include "ledstrip.h"
 #endif
@@ -176,10 +177,16 @@ static err_t netif_init_cb(struct netif *netif) {
     return ERR_OK;
 }
 
+// Any host->device ethernet frame ever received this boot. Zero long after
+// enumeration means the host never activated the NCM link (see the
+// link-recovery bounce in usb_net_task).
+static uint32_t net_rx_frames = 0;
+
 // Process the frame inline (pattern from the TinyUSB 0.20 example): the NCM
 // driver delivers one datagram at a time and recv_renew re-arms delivery.
 extern "C" bool tud_network_recv_cb(const uint8_t *src, uint16_t size) {
     if (size) {
+        net_rx_frames++;
         struct pbuf *p = pbuf_alloc(PBUF_RAW, size, PBUF_POOL);
         if (!p) return false;
         pbuf_take(p, src, size);
@@ -1012,6 +1019,38 @@ void usb_net_task() {
         printf("[NET] entering BOOTSEL (UF2 flash mode)\n");
         rom_reset_usb_boot_extra(-1, 0, false); // does not return
     }
+
+#ifdef ENABLE_WAKE_HID
+    // NCM link-recovery bounce. After a warm reboot (UF2 flash / watchdog)
+    // macOS sometimes re-binds the whole composite -- HID and audio work --
+    // but never activates the NCM data interface: its ethernet interface
+    // sits "inactive" (link down, alt setting 0), no DHCP happens, and the
+    // config page is unreachable until the dongle is replugged. A
+    // tud_disconnect()/tud_connect() bounce IS a replug as far as the host
+    // can tell, so: if the host has never sent a single ethernet frame by
+    // NET_QUIET_BOUNCE_MS after enumeration, request one rebind (at most
+    // twice per boot). A live host always talks within a couple of seconds
+    // (DHCP/ARP/mDNS); a host with no NCM driver at all just sees at most
+    // two extra re-enumerations. Never fires while a controller is
+    // connected -- the config page is not worth yanking a gamepad mid-game.
+    constexpr uint32_t NET_QUIET_BOUNCE_MS = 8000;
+    static absolute_time_t net_quiet_deadline = nil_time;
+    static uint8_t net_bounces = 0;
+    if (!tud_mounted()) {
+        net_quiet_deadline = nil_time; // re-arms on the next mount
+    } else if (is_nil_time(net_quiet_deadline)) {
+        net_quiet_deadline = make_timeout_time_ms(NET_QUIET_BOUNCE_MS);
+    } else if (net_rx_frames == 0 && net_bounces < 2 &&
+               time_reached(net_quiet_deadline) &&
+               !tud_suspended() && !usb_variant_swap_in_progress() &&
+               bt_connected_count() == 0) {
+        net_bounces++;
+        printf("[NET] no host network traffic since enumeration -> USB rebind (%u/2)\n",
+               net_bounces);
+        usb_request_rebind();
+        net_quiet_deadline = nil_time;
+    }
+#endif
 }
 
 #endif // ENABLE_WEBCONFIG
