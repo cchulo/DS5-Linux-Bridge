@@ -28,8 +28,11 @@ Once the bridge firmware is running you never need the button again (handy when
 the board is mounted inside a case): the **Flash mode** button at the bottom of
 the config page reboots the adapter into the same UF2 bootloader over the USB
 cable it's already plugged into. The `RP2350` drive appears; drop the new
-`.uf2` on it as usual. If you enter flash mode by accident, unplug and replug
-the adapter — it boots the current firmware.
+`.uf2` on it as usual. On builds with the LED strip, the strip holds **solid
+orange** for the whole flash-mode session and returns to the normal display
+once the new firmware boots (see
+[LED strip status codes](#led-strip-status-codes)). If you enter flash mode by
+accident, unplug and replug the adapter — it boots the current firmware.
 
 The button is only a convenience for a working firmware; keep BOOTSEL-button
 access in mind as the fallback if you ever flash a build too broken to serve
@@ -147,6 +150,36 @@ blacklists its Bluetooth address so it can't silently auto-reconnect afterward.
 To bring a forgotten controller back, re-pair it explicitly (**Share + PS**),
 which clears the blacklist entry on a successful pair. The blacklist persists
 across power cycles.
+
+---
+
+## LED strip status codes
+
+Builds with the WS2812B strip enabled use it as the adapter's status display
+(handy when the board is mounted with its onboard LED hidden). Some of the
+colors are yours to configure; the important ones are fixed so they always
+mean the same thing.
+
+**Fixed codes — cannot be changed or overridden:**
+
+| Strip shows | Meaning |
+| --- | --- |
+| **Solid orange** (whole strip) | **Flash mode.** The adapter is in the UF2 bootloader waiting for firmware — the `RP2350` drive is mounted on your PC. Shown from the moment you press **Flash mode** until the freshly flashed firmware starts (the strip then snaps to the normal display, confirming the flash took). |
+| **Solid red** (whole strip) | **Firmware error.** The firmware crashed and was restarted by the watchdog, or is stuck in a reboot loop (e.g. the radio failed to start). Red that clears after a few seconds means it recovered on its own; red that stays means it's boot-looping — unplug and replug the adapter. |
+| **Blinking yellow** (slot's LEDs, ~1 s cycle) | That controller's battery is at or below **40%** (discharging). |
+| **Blinking red** (slot's LEDs, fast) | That controller's battery is at or below **20%** (discharging) — charge it now. |
+
+The fixed codes deliberately win over everything else, including the LED
+debug panel's overrides — if the strip goes solid red or orange, that is the
+adapter itself talking.
+
+**Configurable displays** (Lights section of the config page):
+
+| Strip shows | Meaning |
+| --- | --- |
+| **Breathing color** (whole strip, default blue) | Powered on, no controller connected, not pairing — waiting for a pad. Color: **Waiting color**. |
+| **Solid slot color** (slot's LEDs, default blue) | That slot's controller is connected and healthy. Color: **Slot colors** (matches the pad's lightbar). |
+| **Blinking color** (chosen pixels, default white) | Pairing mode — the adapter is searching for a controller. Pixels and color: the **Pairing** row of the layout grid. |
 
 ---
 

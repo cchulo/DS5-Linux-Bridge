@@ -56,14 +56,23 @@ config page, and OS-specific behavior and troubleshooting.
 - Per-slot indication: **off** = no controller, **solid slot color** =
   connected, **blinking yellow** = battery at or below 40% (discharging),
   **blinking red** (faster) = at or below 20%.
+- **Idle breathing** — with no controller connected (and not pairing), the
+  whole strip slowly breathes a configurable color (default blue): the
+  adapter is on and waiting for a pad.
+- **Fixed status codes** (whole strip, not configurable — see the
+  [user guide](docs/USER_GUIDE.md#led-strip-status-codes)): **solid
+  orange** = flash mode (UF2 bootloader), **solid red** = firmware
+  crashed / boot-looping. The battery-warning yellow/red blinks are fixed
+  colors too.
 - **Configurable layout** — set how many LEDs the strip has (default 8, up to
   32) and click, per slot, exactly which LEDs light up. Any physical
   arrangement works: a line, a ring, a square, several LEDs per slot.
   Note: the Pico can only safely power about 8 LEDs itself; longer strips
   need an external 5 V supply (sharing ground, data stays on GP28).
-- **LED debug panel** in the web UI: simulate a slot's low-battery and
-  critical blinks (without draining a pad), chase a test color down the
-  strip, or blank it. Everything auto-reverts to live status after 60 s.
+- **LED debug panel** in the web UI: simulate a slot's connected/low-battery
+  states, the pairing blink, and the idle breathing (without touching the
+  radio or draining a pad), chase a test color down the strip, or blank it.
+  Everything auto-reverts to live status after 60 s.
 
 ### Web UI
 
