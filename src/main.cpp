@@ -465,6 +465,15 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id,
 }
 
 int main() {
+  // Arm the watchdog before anything that can hang. After a UF2 flash the
+  // core warm-resets while the CYW43 radio keeps running un-power-cycled
+  // (VBUS never dropped), and radio bring-up against a wedged chip can hang
+  // or fail; without a watchdog that strands the dongle with USB
+  // disconnected until someone replugs it. Generous period because early
+  // init legitimately sleeps (vreg settle, POST blink); re-armed to the
+  // tight 1 s period just before the main loop.
+  watchdog_enable(8000, true);
+
 #if SYS_CLOCK_KHZ != 150000
   // Overclock path: raise core voltage before bumping the system clock.
   // (1.20V is stable/safe for 320 MHz.) At the stock 150 MHz this is skipped —
@@ -486,9 +495,23 @@ int main() {
   tud_disconnect();
   board_init_after_tusb();
 
-  if (cyw43_arch_init()) {
-    printf("Failed to initialize CYW43\n");
-    return 1;
+  // The radio is the one piece that survives a warm reset with stale state,
+  // so its init gets retries (cyw43_arch_init() deinits itself on failure)
+  // and, if it never comes up, a watchdog reboot for a fresh start — never
+  // a dead return with USB left disconnected.
+  bool radio_up = false;
+  for (int attempt = 1; attempt <= 3 && !radio_up; attempt++) {
+    watchdog_update();
+    radio_up = cyw43_arch_init() == 0;
+    if (!radio_up) {
+      printf("Failed to initialize CYW43 (attempt %d)\n", attempt);
+      sleep_ms(100);
+    }
+  }
+  if (!radio_up) {
+    printf("CYW43 never came up -> rebooting\n");
+    watchdog_reboot(0, 0, 0);
+    while (true) tight_loop_contents();
   }
 
   // Load persisted config from flash BEFORE usb_net_init(): the web server
@@ -519,10 +542,15 @@ int main() {
   ledstrip_init();
 #endif
 
-  if (watchdog_caused_reboot()) {
+  // watchdog_enable_caused_reboot(), not watchdog_caused_reboot(): the
+  // bootrom also reboots via the watchdog hardware (e.g. after a UF2
+  // flash), which is not a crash — only a timeout of OUR armed watchdog
+  // earns the crash blink (and its 3 s boot delay).
+  if (watchdog_enable_caused_reboot()) {
     printf("Rebooted by Watchdog!\n");
     // 当崩溃重启以后，闪三下灯
     for (int i = 0; i < 6; i++) {
+      watchdog_update();
       if (i % 2 == 0) {
         cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, true);
       } else {
@@ -555,9 +583,11 @@ int main() {
   critical_section_init(&report_cs);
   wake_init();
 
+  watchdog_update();
   bt_init();
   bt_register_data_callback(on_bt_data);
 
+  watchdog_update();
   audio_init();
   state_init();
 
