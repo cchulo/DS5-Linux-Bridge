@@ -200,26 +200,31 @@ void ledstrip_debug_clear() {
     printf("[LED] debug cleared\n");
 }
 
-void ledstrip_panic_red() {
+void ledstrip_hold_solid(uint8_t r, uint8_t g, uint8_t b) {
     if (!led_ready) {
-        // Boot-error path can run before the normal init (e.g. radio never
-        // came up). PIO-only, so it works regardless of the radio's state.
+        // Callers can run before the normal init (e.g. radio never came
+        // up). PIO-only, so it works regardless of the radio's state.
         ledstrip_init();
         if (!led_ready) return;
     }
     // All MAX_PIXELS, not led_count(): the config may not be loaded yet,
-    // and an error should be visible on every physically attached pixel.
-    const uint32_t grb = (uint32_t) shape(255) << 8; // red, brightness-capped
+    // and a status this important should be visible on every physically
+    // attached pixel.
+    const uint32_t grb = ((uint32_t) shape(g) << 16) |
+                         ((uint32_t) shape(r) << 8) |
+                         (uint32_t) shape(b);
     for (int i = 0; i < MAX_PIXELS; i++) {
         pio_sm_put_blocking(led_pio, led_sm, grb << 8u);
     }
     // Let the FIFO drain before a caller reboots: blocking puts only
     // guarantee QUEUED (FIFO is 8 deep at ~30 us/pixel). The pixels then
-    // hold this frame until someone sends new data, so the red survives a
-    // watchdog reboot and stays lit through a boot-loop; the first normal
-    // ledstrip_tick() frame of a healthy boot clears it.
+    // hold this frame until someone sends new data — it survives a reboot
+    // (and the ROM bootloader, which never touches the data pin) and is
+    // cleared by the first normal ledstrip_tick() frame of a healthy boot.
     sleep_ms(1);
 }
+
+void ledstrip_panic_red() { ledstrip_hold_solid(255, 0, 0); }
 
 void ledstrip_tick() {
     if (!led_ready) return;

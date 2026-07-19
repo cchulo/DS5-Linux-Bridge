@@ -1017,6 +1017,13 @@ void usb_net_task() {
     // loop keeps feeding the watchdog until then.
     if (bootsel_pending && time_reached(bootsel_at)) {
         printf("[NET] entering BOOTSEL (UF2 flash mode)\n");
+#ifdef ENABLE_LED_STRIP
+        // Solid orange, held for the whole flash-mode session: the ROM
+        // bootloader runs no code of ours (so no animation is possible),
+        // but the pixels latch this frame until the freshly flashed
+        // firmware renders its first normal frame.
+        ledstrip_hold_solid(255, 165, 0);
+#endif
         rom_reset_usb_boot_extra(-1, 0, false); // does not return
     }
 

@@ -68,11 +68,17 @@ void ledstrip_debug_idle_sim(bool on);
 // Leave debug mode and resume normal status rendering.
 void ledstrip_debug_clear();
 
-// Boot-error indicator: paint the whole strip solid red NOW (initializing
-// the PIO first if needed), for cases where the Pico's own LED is hidden by
-// the mounting. The pixels latch and hold the frame until new data arrives,
-// so the red persists across a watchdog reboot (and through a boot-loop)
-// and is cleared by the first normal frame of a healthy boot.
+// Paint the whole strip one solid color NOW (initializing the PIO first if
+// needed), for dongle-level status when the Pico's own LED is hidden by the
+// mounting. The pixels latch and hold the frame until new data arrives, so
+// it persists across a reboot — including into the ROM UF2 bootloader,
+// which runs no code of ours — and is cleared by the first normal frame of
+// a healthy boot. Brightness-capped like everything else.
+void ledstrip_hold_solid(uint8_t r, uint8_t g, uint8_t b);
+
+// Boot-error indicator: whole strip solid red (see ledstrip_hold_solid for
+// the latching/clearing behavior — red through a boot-loop until a healthy
+// boot renders).
 void ledstrip_panic_red();
 
 #endif // DS5_BRIDGE_LEDSTRIP_H
