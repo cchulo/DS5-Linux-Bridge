@@ -244,6 +244,7 @@ static int json_config(char *out, size_t cap) {
                     "\"led_masks\":[\"%lX\",\"%lX\",\"%lX\",\"%lX\"],"
                     "\"pairing_mask\":\"%lX\","
                     "\"pairing_rgb\":\"%02X%02X%02X\","
+                    "\"idle_rgb\":\"%02X%02X%02X\","
                     "\"disable_player_led_lock\":%u,"
                     "\"disable_lightbar_override\":%u,"
                     "\"lightbar_filter_rgb\":\"%02X%02X%02X\","
@@ -270,6 +271,7 @@ static int json_config(char *out, size_t cap) {
                     (unsigned long) c.slot_led_mask[3],
                     (unsigned long) c.pairing_led_mask,
                     c.pairing_rgb[0], c.pairing_rgb[1], c.pairing_rgb[2],
+                    c.idle_rgb[0], c.idle_rgb[1], c.idle_rgb[2],
                     c.disable_player_led_lock,
                     c.disable_lightbar_override,
                     c.lightbar_filter_rgb[0], c.lightbar_filter_rgb[1],
@@ -657,6 +659,16 @@ static void apply_post(char *body) {
                     c.pairing_rgb[2] = (uint8_t) v;
                 }
             }
+        } else if (strcmp(tok, "idle_rgb") == 0) {
+            if (strlen(eq) == 6) {
+                char *end = nullptr;
+                const uint32_t v = (uint32_t) strtoul(eq, &end, 16);
+                if (end == eq + 6) {
+                    c.idle_rgb[0] = (uint8_t) (v >> 16);
+                    c.idle_rgb[1] = (uint8_t) (v >> 8);
+                    c.idle_rgb[2] = (uint8_t) v;
+                }
+            }
         } else if (strncmp(tok, "slot_rgb", 8) == 0 &&
                    tok[8] >= '0' && tok[8] <= '3' && tok[9] == '\0') {
             // slot_rgb0..slot_rgb3 = "RRGGBB" (the page strips the '#').
@@ -795,12 +807,12 @@ static void apply_slots_post(char *body) {
            last_action_ok ? "OK" : "REJECTED");
 }
 
-// POST /api/led -- form fields: action=set|chase|sim|pairsim|clear,
+// POST /api/led -- form fields: action=set|chase|sim|pairsim|idlesim|clear,
 // rgb=RRGGBB, pixel=<n>|all, for sim: slot=<n>|all,
 // level=normal|connected|low|critical (per-slot state preview overlaid on
-// live status), and for pairsim: state=on|off (forces the pairing blink
-// without touching the radio). Drives the LED debug override (auto-reverts
-// after 60 s).
+// live status), and for pairsim/idlesim: state=on|off (force the pairing
+// blink / idle breathing without touching the radio). Drives the LED debug
+// override (auto-reverts after 60 s).
 #ifdef ENABLE_LED_STRIP
 static void apply_led_post(char *body) {
     char action[8] = "";
@@ -846,6 +858,10 @@ static void apply_led_post(char *body) {
     } else if (strcmp(action, "pairsim") == 0) {
         if (strcmp(state, "on") == 0) ledstrip_debug_pairing_sim(true);
         else if (strcmp(state, "off") == 0) ledstrip_debug_pairing_sim(false);
+        else last_action_ok = false;
+    } else if (strcmp(action, "idlesim") == 0) {
+        if (strcmp(state, "on") == 0) ledstrip_debug_idle_sim(true);
+        else if (strcmp(state, "off") == 0) ledstrip_debug_idle_sim(false);
         else last_action_ok = false;
     } else if (strcmp(action, "clear") == 0) {
         ledstrip_debug_clear();

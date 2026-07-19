@@ -510,6 +510,11 @@ int main() {
   }
   if (!radio_up) {
     printf("CYW43 never came up -> rebooting\n");
+#ifdef ENABLE_LED_STRIP
+    // The strip holds this red frame across the reboot, so a boot-loop
+    // shows as solid red until a boot succeeds (or the dongle is unplugged).
+    ledstrip_panic_red();
+#endif
     watchdog_reboot(0, 0, 0);
     while (true) tight_loop_contents();
   }
@@ -548,6 +553,11 @@ int main() {
   // earns the crash blink (and its 3 s boot delay).
   if (watchdog_enable_caused_reboot()) {
     printf("Rebooted by Watchdog!\n");
+#ifdef ENABLE_LED_STRIP
+    // Solid red on the strip too — the Pico's own LED can be hidden by the
+    // mounting. Cleared by the first normal frame once the main loop runs.
+    ledstrip_panic_red();
+#endif
     // 当崩溃重启以后，闪三下灯
     for (int i = 0; i < 6; i++) {
       watchdog_update();

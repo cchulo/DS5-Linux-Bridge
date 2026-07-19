@@ -10,6 +10,9 @@
 //                     always matches the pad's lightbar)
 //   blinking yellow = battery <= 40% (discharging)
 //   blinking red    = battery <= 20% (discharging; faster blink)
+// With NO controllers connected (and pairing mode off), the whole strip
+// "breathes" the configured idle color (idle_rgb, default blue) — the
+// dongle is powered and waiting for a pad.
 // Global brightness is capped at 5%.
 //
 // Rendered from the main loop at ~30 Hz via a PIO state machine (claimed
@@ -56,7 +59,20 @@ void ledstrip_debug_slot_sim(int slot, int level);
 // auto-revert; ledstrip_debug_clear() also clears it.
 void ledstrip_debug_pairing_sim(bool on);
 
+// Simulate the idle "waiting for a controller" breathing: forces the
+// whole-strip breathe (config idle_rgb) as a background even while
+// controllers are connected, so the color/cadence can be previewed anytime.
+// Same 60 s auto-revert; ledstrip_debug_clear() also clears it.
+void ledstrip_debug_idle_sim(bool on);
+
 // Leave debug mode and resume normal status rendering.
 void ledstrip_debug_clear();
+
+// Boot-error indicator: paint the whole strip solid red NOW (initializing
+// the PIO first if needed), for cases where the Pico's own LED is hidden by
+// the mounting. The pixels latch and hold the frame until new data arrives,
+// so the red persists across a watchdog reboot (and through a boot-loop)
+// and is cleared by the first normal frame of a healthy boot.
+void ledstrip_panic_red();
 
 #endif // DS5_BRIDGE_LEDSTRIP_H

@@ -204,6 +204,12 @@ footer .kofi:hover{text-decoration:none;opacity:.9}
   (line, ring, square…). LEDs are numbered from the first one on the strip.
   Unassigned LEDs stay dark. The <b>Pairing</b> row blinks (in its chosen
   color) while the dongle is searching for a controller.</div>
+  <div style="display:flex;align-items:center;gap:.6rem;margin-top:.5rem">
+    <span class="hint" style="margin:0">Waiting color</span>
+    <input type="color" id="idle_rgb" value="#0000ff">
+  </div>
+  <div class="hint">With no controller connected (and not pairing), the whole
+  strip slowly "breathes" this color to show the adapter is on and waiting.</div>
 </div>
 </div>
 
@@ -227,6 +233,13 @@ footer .kofi:hover{text-decoration:none;opacity:.9}
     <span class="lctl">
       <button id="led_sim_pair">Simulate pairing</button>
       <button id="led_sim_pair_off">Stop</button>
+    </span>
+  </div>
+  <div class="ledrow ctl">
+    <span class="ledlbl">Waiting</span>
+    <span class="lctl">
+      <button id="led_sim_idle">Simulate waiting</button>
+      <button id="led_sim_idle_off">Stop</button>
     </span>
   </div>
   <div class="ledrow ctl">
@@ -311,7 +324,7 @@ function bindRange(id,out){const el=$(id);const fn=()=>$(out).textContent=el.val
 const upd=[bindRange('audio_buffer_length','ab_val'),bindRange('inactive_time','it_val')];
 
 function markDirty(){$('save').disabled=false;setStatus('unsaved changes','dirty')}
-['controller_mode','polling_rate_mode','disable_inactive_disconnect','disable_pico_led','player_led_lock','lightbar_override','lightbar_filter_rgb','webconfig_subnet']
+['controller_mode','polling_rate_mode','disable_inactive_disconnect','disable_pico_led','player_led_lock','lightbar_override','lightbar_filter_rgb','webconfig_subnet','idle_rgb']
   .forEach(id=>$(id).onchange=markDirty);
 function toggleCustomIp(){$('customip_wrap').style.display=$('webconfig_subnet').value==='3'?'':'none'}
 $('webconfig_subnet').addEventListener('change',toggleCustomIp);
@@ -355,6 +368,7 @@ async function load(){
     ledMasks=(c.led_masks||['2','8','20','80']).map(h=>parseInt(h,16)>>>0);
     pairingMask=parseInt(c.pairing_mask||'55',16)>>>0;
     if(c.pairing_rgb)pairingRgb='#'+c.pairing_rgb.toLowerCase();
+    if(c.idle_rgb)$('idle_rgb').value='#'+c.idle_rgb.toLowerCase();
     buildLedMap();
     upd.forEach(f=>f());
     $('save').disabled=true;setStatus('');
@@ -383,6 +397,7 @@ async function save(){
   for(let i=0;i<4;i++)parts.push('led_mask'+i+'='+(ledMasks[i]>>>0).toString(16));
   parts.push('pairing_mask='+(pairingMask>>>0).toString(16));
   parts.push('pairing_rgb='+pairingRgb.slice(1));
+  parts.push('idle_rgb='+$('idle_rgb').value.slice(1));
   const body=parts.join('&');
   setStatus('saving…','dirty');
   try{
@@ -679,6 +694,8 @@ $('led_sim_crit').onclick=()=>postLed('action=sim&slot='+$('led_slot').value+'&l
 $('led_sim_norm').onclick=()=>postLed('action=sim&slot='+$('led_slot').value+'&level=normal');
 $('led_sim_pair').onclick=()=>postLed('action=pairsim&state=on');
 $('led_sim_pair_off').onclick=()=>postLed('action=pairsim&state=off');
+$('led_sim_idle').onclick=()=>postLed('action=idlesim&state=on');
+$('led_sim_idle_off').onclick=()=>postLed('action=idlesim&state=off');
 $('led_chase').onclick=()=>postLed('action=chase&rgb='+$('led_color').value.slice(1));
 $('led_off').onclick=()=>postLed('action=set&rgb=000000&pixel=all');
 $('led_normal').onclick=()=>postLed('action=clear');

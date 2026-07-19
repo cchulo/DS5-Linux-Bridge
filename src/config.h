@@ -120,6 +120,10 @@ struct __attribute__((packed)) Config_body {
     // "unset" here: black IS the meaningful default (Steam/rumble-only
     // writers send zero-filled LED bytes).
     uint8_t lightbar_filter_rgb[3];
+    // Color of the whole-strip "breathing" idle display shown while no
+    // controller is connected and pairing mode is not active. All-zero means
+    // "unset" (fresh/migrated config) and defaults to blue in config_valid().
+    uint8_t idle_rgb[3];
 };
 
 struct __attribute__((packed)) Config {

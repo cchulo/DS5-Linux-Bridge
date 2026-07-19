@@ -59,6 +59,11 @@ constexpr uint8_t RED[3]    = {255, 0, 0};
 constexpr uint32_t BLINK_YELLOW_MS = 1000;
 constexpr uint32_t BLINK_RED_MS    = 400;
 
+// Idle "waiting for a controller" breathing: whole strip fades the
+// configured idle_rgb (default blue) in and out, like a DS5 searching for
+// its console. Full in+out cycle length:
+constexpr uint32_t BREATHE_MS = 3000;
+
 // Deliberately early warnings: charging only from 10% is hard on the cell,
 // so nudge at 40% and insist at 20%.
 constexpr uint8_t LOW_BATT_YELLOW_PCT = 40;
@@ -84,14 +89,16 @@ uint8_t  dbg_px[MAX_PIXELS][3];
 // Unlike the global debug modes above, this overlays the NORMAL rendering,
 // so one slot can preview a state while the others keep showing their real
 // state. Uses the exact production colors and cadence. sim_pairing likewise
-// forces the pairing overlay without touching the radio.
+// forces the pairing overlay without touching the radio, and sim_idle
+// forces the idle "waiting" breathing even while controllers are connected.
 uint8_t  sim_level[BT_MAX_SLOTS] = {};
 bool     sim_pairing = false;
+bool     sim_idle = false;
 bool     sim_any = false;
 uint64_t sim_until_us = 0;
 
 inline void sim_recompute_any() {
-    sim_any = sim_pairing;
+    sim_any = sim_pairing || sim_idle;
     for (auto s : sim_level) sim_any |= (s != 0);
 }
 
@@ -165,6 +172,14 @@ void ledstrip_debug_pairing_sim(bool on) {
     printf("[LED] debug pairing sim: %s\n", on ? "on" : "off");
 }
 
+void ledstrip_debug_idle_sim(bool on) {
+    if (!led_ready) return;
+    sim_idle = on;
+    sim_recompute_any();
+    sim_until_us = time_us_64() + DEBUG_TIMEOUT_US;
+    printf("[LED] debug idle sim: %s\n", on ? "on" : "off");
+}
+
 void ledstrip_debug_chase(uint8_t r, uint8_t g, uint8_t b) {
     if (!led_ready) return;
     dbg_chase = 1;
@@ -180,8 +195,30 @@ void ledstrip_debug_clear() {
     dbg_active = false;
     for (auto &s : sim_level) s = 0;
     sim_pairing = false;
+    sim_idle = false;
     sim_any = false;
     printf("[LED] debug cleared\n");
+}
+
+void ledstrip_panic_red() {
+    if (!led_ready) {
+        // Boot-error path can run before the normal init (e.g. radio never
+        // came up). PIO-only, so it works regardless of the radio's state.
+        ledstrip_init();
+        if (!led_ready) return;
+    }
+    // All MAX_PIXELS, not led_count(): the config may not be loaded yet,
+    // and an error should be visible on every physically attached pixel.
+    const uint32_t grb = (uint32_t) shape(255) << 8; // red, brightness-capped
+    for (int i = 0; i < MAX_PIXELS; i++) {
+        pio_sm_put_blocking(led_pio, led_sm, grb << 8u);
+    }
+    // Let the FIFO drain before a caller reboots: blocking puts only
+    // guarantee QUEUED (FIFO is 8 deep at ~30 us/pixel). The pixels then
+    // hold this frame until someone sends new data, so the red survives a
+    // watchdog reboot and stays lit through a boot-loop; the first normal
+    // ledstrip_tick() frame of a healthy boot clears it.
+    sleep_ms(1);
 }
 
 void ledstrip_tick() {
@@ -216,8 +253,40 @@ void ledstrip_tick() {
         if (sim_any && now >= sim_until_us) {
             for (auto &s : sim_level) s = 0;
             sim_pairing = false;
+            sim_idle = false;
             sim_any = false;
             printf("[LED] slot sim timed out, back to live status\n");
+        }
+
+        const bool pairing_now =
+            bt_pairing_mode_active() || (sim_any && sim_pairing);
+
+        // Idle "waiting for a controller" breathing: shown when there is
+        // nothing else to show (no pad connected, no sim overlay, not
+        // pairing) — or forced by the idle sim, which paints it as a
+        // background under whatever else is live so the color/cadence can
+        // be previewed anytime. Painted first, so connected slots and the
+        // pairing overlay always win their pixels.
+        bool idle_now = !pairing_now && !sim_any;
+        if (idle_now) {
+            for (uint8_t slot = 0; slot < BT_MAX_SLOTS && idle_now; slot++) {
+                BtStatus st;
+                bt_get_status(slot, &st);
+                idle_now = !st.connected;
+            }
+        }
+        if (idle_now || (sim_any && sim_idle)) {
+            // Raised-cosine fade, scaled pre-gamma so the ramp looks even.
+            constexpr float TWO_PI = 6.2831853f;
+            const float lvl =
+                0.5f - 0.5f * cosf((float) (ms % BREATHE_MS) *
+                                   (TWO_PI / (float) BREATHE_MS));
+            const uint8_t *c = get_config().idle_rgb;
+            for (int p = 0; p < count; p++) {
+                frame[p][0] = (uint8_t) ((float) c[0] * lvl + 0.5f);
+                frame[p][1] = (uint8_t) ((float) c[1] * lvl + 0.5f);
+                frame[p][2] = (uint8_t) ((float) c[2] * lvl + 0.5f);
+            }
         }
 
         for (uint8_t slot = 0; slot < BT_MAX_SLOTS; slot++) {
@@ -266,8 +335,7 @@ void ledstrip_tick() {
         // for a controller (~2 Hz, like the onboard LED's pairing blink;
         // painted last so it wins shared pixels). Independent of
         // disable_pico_led -- that switch only covers the onboard LED.
-        if ((bt_pairing_mode_active() || (sim_any && sim_pairing)) &&
-            blink_on(ms, 500)) {
+        if (pairing_now && blink_on(ms, 500)) {
             paint_mask(frame, get_config().pairing_led_mask, count,
                        get_config().pairing_rgb);
         }
