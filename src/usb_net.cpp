@@ -33,6 +33,7 @@
 #include "lwip/timeouts.h"
 
 #include "hardware/watchdog.h"
+#include "pico/bootrom.h"
 #include "pico/time.h"
 #include "pico/unique_id.h"
 
@@ -495,6 +496,13 @@ extern "C" int fs_open_custom(struct fs_file *file, const char *name) {
         static const char pr[] = "pairing rejected: no free controller slot or bond seat";
         return make_file(file, "409 Conflict", "text/plain", pr, sizeof(pr) - 1);
     }
+    // POST /api/reboot redirects here once the BOOTSEL reboot is armed; the
+    // device drops off the bus ~0.5 s after this response is sent and
+    // re-enumerates as the ROM UF2 mass-storage bootloader.
+    if (strcmp(name, "/api/reboot-ok") == 0) {
+        static const char rb[] = "rebooting to BOOTSEL";
+        return make_file(file, "200 OK", "text/plain", rb, sizeof(rb) - 1);
+    }
     if (strcmp(name, "/api/save-failed") == 0) {
         static const char sf[] = "config save failed: flash not written";
         return make_file(file, "500 Internal Server Error", "text/plain", sf, sizeof(sf) - 1);
@@ -534,11 +542,13 @@ extern "C" int fs_read_custom(struct fs_file *file, char *buffer, int count) {
 static char post_buf[POST_BUFSIZE];
 static u16_t post_pos;
 static void *post_conn;
-enum post_target_t { POST_CONFIG, POST_BONDS, POST_SLOTS, POST_LED };
+enum post_target_t { POST_CONFIG, POST_BONDS, POST_SLOTS, POST_LED, POST_REBOOT };
 static post_target_t post_target; // which endpoint the in-flight POST targets
 static bool last_save_ok = true; // result of the most recent config_save()
 static bool last_action_ok = true; // result of the most recent slots/led action
 static bool last_pair_rejected = false; // pair action refused (no free bond/slot)
+static bool bootsel_pending = false;   // armed by POST /api/reboot
+static absolute_time_t bootsel_at;     // when to actually drop into BOOTSEL
 
 static int clampi(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
@@ -837,6 +847,29 @@ static void apply_led_post(char *body) {
 }
 #endif
 
+// POST /api/reboot -- form field: action=bootsel. Arms a deferred reboot into
+// the ROM UF2 bootloader so new firmware can be flashed without reaching the
+// BOOTSEL button (the pico is screwed into the case). Deferred rather than
+// immediate because rebooting here would kill the USB link before the HTTP
+// response goes out and the page would show a spinner instead of "flash mode".
+// The reboot itself happens in usb_net_task().
+static void apply_reboot_post(char *body) {
+    char action[16] = "";
+    for (char *tok = strtok(body, "&"); tok; tok = strtok(nullptr, "&")) {
+        char *eq = strchr(tok, '=');
+        if (!eq) continue;
+        *eq++ = 0;
+        if (strcmp(tok, "action") == 0) strncpy(action, eq, sizeof(action) - 1);
+    }
+    last_action_ok = strcmp(action, "bootsel") == 0;
+    if (last_action_ok) {
+        bootsel_pending = true;
+        bootsel_at = make_timeout_time_ms(500);
+    }
+    printf("[NET] reboot '%s' via web UI: %s\n", action,
+           last_action_ok ? "ARMED (BOOTSEL in 500ms)" : "REJECTED");
+}
+
 extern "C" err_t httpd_post_begin(void *connection, const char *uri, const char *http_request,
                                   u16_t http_request_len, int content_len, char *response_uri,
                                   u16_t response_uri_len, u8_t *post_auto_wnd) {
@@ -852,6 +885,7 @@ extern "C" err_t httpd_post_begin(void *connection, const char *uri, const char 
 #ifdef ENABLE_LED_STRIP
     else if (strcmp(uri, "/api/led") == 0) target = POST_LED;
 #endif
+    else if (strcmp(uri, "/api/reboot") == 0) target = POST_REBOOT;
     else return ERR_VAL;
     if (content_len >= POST_BUFSIZE) return ERR_VAL;
     if (post_conn) return ERR_USE; // one POST at a time
@@ -894,6 +928,11 @@ extern "C" void httpd_post_finished(void *connection, char *response_uri, u16_t 
                      last_action_ok ? "/api/slots" : "/api/action-failed");
             break;
 #endif
+        case POST_REBOOT:
+            apply_reboot_post(post_buf);
+            snprintf(response_uri, response_uri_len,
+                     last_action_ok ? "/api/reboot-ok" : "/api/action-failed");
+            break;
         case POST_CONFIG:
         default:
             apply_post(post_buf);
@@ -941,6 +980,13 @@ void usb_net_init() {
 
 void usb_net_task() {
     sys_check_timeouts();
+    // Deferred BOOTSEL reboot (POST /api/reboot). The 500 ms grace lets the
+    // HTTP response reach the browser before the USB link disappears; the main
+    // loop keeps feeding the watchdog until then.
+    if (bootsel_pending && time_reached(bootsel_at)) {
+        printf("[NET] entering BOOTSEL (UF2 flash mode)\n");
+        rom_reset_usb_boot_extra(-1, 0, false); // does not return
+    }
 }
 
 #endif // ENABLE_WEBCONFIG

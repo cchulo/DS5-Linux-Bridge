@@ -278,10 +278,13 @@ footer .kofi:hover{text-decoration:none;opacity:.9}
 <div>
   <button id="save">Save</button>
   <button id="factoryreset" class="fg">Factory reset</button>
+  <button id="flashmode" style="background:#3a3a3a">Flash mode</button>
   <span id="status"></span>
 </div>
 <div class="hint">Factory reset restores all settings to defaults. Paired
-  controllers are kept (use <b>Forget all</b> to remove those).</div>
+  controllers are kept (use <b>Forget all</b> to remove those). Flash mode
+  reboots the adapter into its UF2 bootloader for a firmware update — no need
+  to reach the BOOTSEL button.</div>
 
 <script>
 const $=id=>document.getElementById(id);
@@ -391,6 +394,17 @@ async function factoryReset(){
   }catch(e){setStatus('reset failed','err')}
 }
 $('factoryreset').onclick=factoryReset;
+
+async function flashMode(){
+  if(!confirm('Reboot into flash (UF2) mode?\n\nThe adapter stops working and shows up as a USB drive instead — copy the new firmware .uf2 onto it and it restarts as the bridge.\n\nChanged your mind after clicking OK? Just unplug and replug the adapter to boot the current firmware.'))return;
+  setStatus('rebooting…','dirty');
+  try{
+    const r=await fetch('/api/reboot',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'action=bootsel'});
+    if(r.ok)setStatus('Flash mode ✓ — this page is now offline; look for the USB drive','ok');
+    else setStatus('flash mode refused','err');
+  }catch(e){setStatus('flash mode request failed','err')}
+}
+$('flashmode').onclick=flashMode;
 
 // ----- Paired controllers -----
 function fmtAddr(h){return h.match(/.{2}/g).join(':')}

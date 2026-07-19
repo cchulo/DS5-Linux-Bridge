@@ -22,6 +22,19 @@ debugging, see the [README](../README.md).
 3. Drag and drop the compiled `.uf2` firmware onto that volume. The board
    reboots into the firmware automatically.
 
+### Re-flashing without the BOOTSEL button
+
+Once the bridge firmware is running you never need the button again (handy when
+the board is mounted inside a case): the **Flash mode** button at the bottom of
+the config page reboots the adapter into the same UF2 bootloader over the USB
+cable it's already plugged into. The `RP2350` drive appears; drop the new
+`.uf2` on it as usual. If you enter flash mode by accident, unplug and replug
+the adapter — it boots the current firmware.
+
+The button is only a convenience for a working firmware; keep BOOTSEL-button
+access in mind as the fallback if you ever flash a build too broken to serve
+the config page.
+
 ---
 
 ## Pairing a controller
