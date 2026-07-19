@@ -280,11 +280,20 @@ void ledstrip_tick() {
                 idle_now = !st.connected;
             }
         }
-        if (idle_now || (sim_any && sim_idle)) {
+        const bool breathe_now = idle_now || (sim_any && sim_idle);
+        // Phase-anchor the breathe to the moment it becomes active, so it
+        // always starts from dark and fades in — free-running uptime phase
+        // would make the strip jump to whatever brightness the cycle
+        // happened to be at (an abrupt solid-color pop).
+        static uint32_t breathe_epoch_ms = 0;
+        static bool breathe_prev = false;
+        if (breathe_now && !breathe_prev) breathe_epoch_ms = ms;
+        breathe_prev = breathe_now;
+        if (breathe_now) {
             // Raised-cosine fade, scaled pre-gamma so the ramp looks even.
             constexpr float TWO_PI = 6.2831853f;
             const float lvl =
-                0.5f - 0.5f * cosf((float) (ms % BREATHE_MS) *
+                0.5f - 0.5f * cosf((float) ((ms - breathe_epoch_ms) % BREATHE_MS) *
                                    (TWO_PI / (float) BREATHE_MS));
             const uint8_t *c = get_config().idle_rgb;
             for (int p = 0; p < count; p++) {
