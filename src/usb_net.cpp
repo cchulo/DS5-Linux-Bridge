@@ -196,6 +196,16 @@ static uint32_t net_rx_frames = 0;
 // driver delivers one datagram at a time and recv_renew re-arms delivery.
 extern "C" bool tud_network_recv_cb(const uint8_t *src, uint16_t size) {
     if (size) {
+        // HARD GUARD: if usb_net_init() never ran (AP onboarding skips it),
+        // netif_data.input is NULL and calling it is a jump to address 0 --
+        // hard fault -> watchdog -> bootloop that can also thrash the host's
+        // USB stack (HW-observed on SteamOS). AP mode now keeps the device
+        // off the bus entirely (main.cpp), so this is defense in depth: drop
+        // the frame and re-arm delivery.
+        if (netif_data.input == NULL) {
+            tud_network_recv_renew();
+            return true;
+        }
         net_rx_frames++;
         struct pbuf *p = pbuf_alloc(PBUF_RAW, size, PBUF_POOL);
         if (!p) return false;

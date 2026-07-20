@@ -633,7 +633,18 @@ int main() {
   // probes for not-yet-connected pads are answered from the persisted
   // snapshot (bt_feature_snapshot_get). Being enumerated before the host
   // suspends is also what makes remote-wakeup possible.
-  tud_connect();
+  //
+  // NEVER in AP onboarding mode. Unlike upstream (whose onboarding enumerates
+  // an inert MINIMAL device), our FULL face exposes audio + NCM + gamepad
+  // interfaces whose backing state (audio_init, state_init, usb_net_init) was
+  // deliberately skipped above -- the host's first NCM frame hit the NULL
+  // netif input fn: hard fault -> watchdog -> re-enumerate, a crash/replug
+  // storm that bootlooped the dongle and took the host's USB stack with it
+  // (HW-observed on SteamOS). During onboarding USB is power only; the
+  // device is configured over the portal and reboots into STA when done.
+  if (!ap_onboarding) {
+    tud_connect();
+  }
 #endif
 
   watchdog_enable(1000, true);
@@ -641,10 +652,12 @@ int main() {
   // Onboarding loop: a stripped main loop with BT/audio/HID skipped (they were
   // never initialised in AP mode). Pump only the radio/lwIP (cyw43_arch_poll +
   // wifi_net_task drive the SoftAP RX, DHCP/DNS servers, scan, captive portal)
-  // plus tud_task to keep USB alive, and feed the watchdog. The device leaves
-  // this loop by rebooting into STA mode once the user provisions
-  // (wifi_net_task fires the deferred watchdog_reboot). The LED strip and the
-  // NCM web server are deliberately not serviced here -- setup mode only.
+  // and feed the watchdog. USB stays tud_disconnect()'d (see above); tud_task
+  // is still pumped so the stack stays consistent if anything ever connects
+  // it. The device leaves this loop by rebooting into STA mode once the user
+  // provisions (wifi_net_task fires the deferred watchdog_reboot). The LED
+  // strip and the NCM web server are deliberately not serviced here -- setup
+  // mode only.
   if (ap_onboarding) {
     while (1) {
       watchdog_update();
