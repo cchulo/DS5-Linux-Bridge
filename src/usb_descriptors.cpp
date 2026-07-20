@@ -46,10 +46,6 @@ enum {
     ITF_NUM_AUDIO_STREAMING_OUT,
     ITF_NUM_AUDIO_STREAMING_IN,
     ITF_NUM_HID,       // slot 0 gamepad -- the upstream interface number (3)
-#ifdef ENABLE_WEBCONFIG
-    ITF_NUM_NET,       // CDC-NCM control (IAD spans control + data)
-    ITF_NUM_NET_DATA,
-#endif
 #ifdef ENABLE_WAKE_HID
     ITF_NUM_HID_KBD,
 #endif
@@ -71,11 +67,7 @@ enum {
     // misc/common/IAD combo whenever the IAD-using CDC-NCM function is present.
     // The 8-byte audio IAD is only emitted in webconfig builds.
     CONFIG_DESC_LEN_AUDIO_IAD =
-#if defined(ENABLE_WEBCONFIG)
-        8,
-#else
         0,
-#endif
     // One gamepad interface block: 9 (interface) + 9 (HID class) + 7 (EP IN)
     // + 7 (EP OUT) = 32 bytes.
     CONFIG_DESC_LEN_GAMEPAD = 32,
@@ -91,11 +83,7 @@ enum {
         0,
 #endif
     CONFIG_DESC_LEN_NET =
-#ifdef ENABLE_WEBCONFIG
-        TUD_CDC_NCM_DESC_LEN,
-#else
         0,
-#endif
     // Full length with every slot's gamepad block; trailing blocks (slots
     // 1..N-1) sit after the base set.
     CONFIG_DESC_LEN_TOTAL = CONFIG_DESC_LEN_BASE + CONFIG_DESC_LEN_WAKE_KBD
@@ -109,10 +97,6 @@ enum {
     STRID_MANUFACTURER,
     STRID_PRODUCT,
     STRID_SERIAL,
-#ifdef ENABLE_WEBCONFIG
-    STRID_NET,
-    STRID_MAC,
-#endif
 };
 
 //--------------------------------------------------------------------+
@@ -126,47 +110,6 @@ enum {
 // creating two separate network adapters across a variant swap.
 //--------------------------------------------------------------------+
 
-#ifdef ENABLE_WEBCONFIG
-// CDC-NCM (config web UI network interface), parameterised by control-interface
-// number `ncm_itf` (the data interface is ncm_itf+1). Endpoints: notif IN 0x85,
-// bulk OUT 0x05, bulk IN 0x86.
-//
-// Hand-emitted (not TUD_CDC_NCM_DESCRIPTOR) so BOTH the IAD iFunction and the
-// control-interface iInterface strings are 0. Windows builds the Net adapter's
-// FriendlyName as "<iManufacturer> <function/interface string>"; the
-// manufacturer ("Sony Interactive Entertainment") must stay for DualSense
-// driver matching, and adding a function string only makes the name worse. With
-// no strings, Windows shows just the manufacturer-derived name. Byte layout
-// matches the macro exactly (TUD_CDC_NCM_DESC_LEN), so the length asserts hold.
-#define DS5_NCM_DESC(ncm_itf) \
-    /* Interface Association: control + data, iFunction = 0 (no string) */ \
-    8, TUSB_DESC_INTERFACE_ASSOCIATION, (ncm_itf), 2, TUSB_CLASS_CDC, \
-        CDC_COMM_SUBCLASS_NETWORK_CONTROL_MODEL, 0, 0, \
-    /* CDC Control Interface (iInterface = 0, no string) */ \
-    9, TUSB_DESC_INTERFACE, (ncm_itf), 0, 1, TUSB_CLASS_CDC, \
-        CDC_COMM_SUBCLASS_NETWORK_CONTROL_MODEL, 0, 0, \
-    /* CDC Header */ \
-    5, TUSB_DESC_CS_INTERFACE, CDC_FUNC_DESC_HEADER, U16_TO_U8S_LE(0x0110), \
-    /* CDC Union */ \
-    5, TUSB_DESC_CS_INTERFACE, CDC_FUNC_DESC_UNION, (ncm_itf), (uint8_t)((ncm_itf) + 1), \
-    /* CDC Ethernet Networking (iMacAddress = STRID_MAC) */ \
-    13, TUSB_DESC_CS_INTERFACE, CDC_FUNC_DESC_ETHERNET_NETWORKING, STRID_MAC, 0, 0, 0, 0, \
-        U16_TO_U8S_LE(CFG_TUD_NET_MTU), U16_TO_U8S_LE(0), 0, \
-    /* CDC-NCM Functional Descriptor */ \
-    6, TUSB_DESC_CS_INTERFACE, CDC_FUNC_DESC_NCM, U16_TO_U8S_LE(0x0100), 0, \
-    /* Endpoint Notification (IN 0x85) */ \
-    7, TUSB_DESC_ENDPOINT, 0x85, TUSB_XFER_INTERRUPT, U16_TO_U8S_LE(64), 50, \
-    /* CDC Data Interface (default, inactive) */ \
-    9, TUSB_DESC_INTERFACE, (uint8_t)((ncm_itf) + 1), 0, 0, TUSB_CLASS_CDC_DATA, 0, \
-        NCM_DATA_PROTOCOL_NETWORK_TRANSFER_BLOCK, 0, \
-    /* CDC Data Interface (alternative, active) */ \
-    9, TUSB_DESC_INTERFACE, (uint8_t)((ncm_itf) + 1), 1, 2, TUSB_CLASS_CDC_DATA, 0, \
-        NCM_DATA_PROTOCOL_NETWORK_TRANSFER_BLOCK, 0, \
-    /* Endpoint In (bulk 0x86) */ \
-    7, TUSB_DESC_ENDPOINT, 0x86, TUSB_XFER_BULK, U16_TO_U8S_LE(64), 0, \
-    /* Endpoint Out (bulk 0x05) */ \
-    7, TUSB_DESC_ENDPOINT, 0x05, TUSB_XFER_BULK, U16_TO_U8S_LE(64), 0
-#endif // ENABLE_WEBCONFIG
 
 // DualSense gamepad HID interface block, parameterised by interface number and
 // endpoint pair. 32 bytes (CONFIG_DESC_LEN_GAMEPAD): 9 (interface) + 9 (HID
@@ -236,21 +179,21 @@ tusb_desc_device_t desc_device =
     // As required by USB Specs IAD's subclass must be common class (2) and protocol must be IAD (1).
     // The FULL variant carries the audio + CDC-NCM IADs, so webconfig builds need
     // the Misc/common/IAD device class.
-#if defined(ENABLE_WEBCONFIG)
-    .bDeviceClass = TUSB_CLASS_MISC,
-    .bDeviceSubClass = MISC_SUBCLASS_COMMON,
-    .bDeviceProtocol = MISC_PROTOCOL_IAD,
-#else
     .bDeviceClass = 0x00,
     .bDeviceSubClass = 0x00,
     .bDeviceProtocol = 0x00,
-#endif
     .bMaxPacketSize0 = CFG_TUD_ENDPOINT0_SIZE,
 
     .idVendor = 0x054C,
     // .idProduct = 0x0CE6, // DS
     // .idProduct = 0x0DF2, // DSE
-    .bcdDevice = 0x0100,
+    // 0x0101, not a real DualSense's 0x0100: bumped when the NCM interface was
+    // removed so Windows' per-(VID,PID,bcdDevice) descriptor cache can't serve
+    // the stale NCM-era composite layout to hosts that saw the old firmware
+    // (same trick as upstream's S3-wake fix). Anticheat note: bcdDevice varies
+    // across real DualSense firmware revisions, so a non-0x0100 value is not a
+    // fingerprint the way an extra interface is.
+    .bcdDevice = 0x0101,
 
     .iManufacturer = 0x01,
     .iProduct = 0x02,
@@ -284,20 +227,6 @@ uint8_t descriptor_configuration[] = {
 #endif
     0xFA, // bMaxPower: 500mA (250 * 2mA)
 
-#if defined(ENABLE_WEBCONFIG)
-    // --- INTERFACE ASSOCIATION DESCRIPTOR: Audio function (interfaces 0-2) ---
-    // Required because the CDC-NCM function (also IAD) is present, so the audio
-    // function must be properly grouped under its own IAD.
-    0x08, // bLength
-    TUSB_DESC_INTERFACE_ASSOCIATION, // bDescriptorType
-    ITF_NUM_AUDIO_CONTROL, // bFirstInterface
-    0x03, // bInterfaceCount
-    0x01, // bFunctionClass: Audio
-    0x01, // bFunctionSubClass: Audio Control
-    0x00, // bFunctionProtocol
-    0x00, // iFunction
-
-#endif
     // --- INTERFACE DESCRIPTOR (0.0): Audio Control ---
     0x09, // bLength
     0x04, // bDescriptorType (INTERFACE)
@@ -508,13 +437,6 @@ uint8_t descriptor_configuration[] = {
     // time for every gamepad block.
     DS5_GAMEPAD_ITF_DESC(ITF_NUM_HID, 0x84, 0x03),
 
-#ifdef ENABLE_WEBCONFIG
-    // --- CDC-NCM (config web UI network interface) at ITF_NUM_NET / +1 ---
-    // Same bytes (via DS5_NCM_DESC) as the MINIMAL variant, so NCM keeps the
-    // same bInterfaceNumber across the variant swap and the host sees one
-    // persistent network adapter rather than two.
-    DS5_NCM_DESC(ITF_NUM_NET),
-#endif
 #ifdef ENABLE_WAKE_HID
     // --- HID Boot Keyboard (wake key only) at ITF_NUM_HID_KBD ---
     DS5_KBD_ITF_DESC(ITF_NUM_HID_KBD),
@@ -556,69 +478,15 @@ static_assert(sizeof(descriptor_configuration) == CONFIG_DESC_LEN_TOTAL,
 // keyboard on wake". The dummy reuses the gamepad's IN endpoint 0x84; it is never
 // written to.
 //
-// Interface layout depends on ENABLE_WEBCONFIG:
-//
-//   With ENABLE_WEBCONFIG (the release config) MINIMAL also carries the CDC-NCM
-//   network interface so the config web page is reachable even when no controller
-//   is connected. NCM MUST keep the same bInterfaceNumber as in FULL (4-5), else
-//   the host creates a second network adapter on every variant swap. FULL has
-//   audio(0-2)+gamepad(3) before NCM, so MINIMAL pads interfaces 0-2 with inert
-//   vendor interfaces and puts the dummy HID at interface 3 (the gamepad's slot):
-//       0-2 inert vendor (WinUSB compat-id -> no driver, no yellow bang)
-//       3   dummy HID            (HID instance 0)
-//       4-5 CDC-NCM              (same number as FULL)
-//       6   boot keyboard        (HID instance 1)
-//
-//   Without ENABLE_WEBCONFIG there is no NCM, so the minimal layout is just:
+// MINIMAL interface layout (pure-DualSense face -- the NCM-era layout that
+// padded interfaces and carried CDC-NCM at 4-5 was removed with the NCM
+// transport; the config page lives on WiFi now):
 //       0   dummy HID            (HID instance 0)
 //       1   boot keyboard        (HID instance 1)
 //
 // FULL's interface order is canonical/frozen (matches a real DualSense); the
 // padding lives entirely in MINIMAL. Interface numbers stay ascending, so Windows
 // accepts the config (it rejects out-of-order interfaces).
-#ifdef ENABLE_WEBCONFIG
-// MINIMAL interface numbers (mirror FULL up to and including NCM).
-enum {
-    MIN_ITF_INERT0 = 0,
-    MIN_ITF_INERT1,
-    MIN_ITF_INERT2,
-    MIN_ITF_DUMMY_HID,   // 3 -- slot 0 gamepad's seat in FULL; HID instance 0
-    MIN_ITF_NET,         // 4 -- NCM control (same as FULL ITF_NUM_NET)
-    MIN_ITF_NET_DATA,    // 5
-    MIN_ITF_HID_KBD,     // 6 -- HID instance 1
-    MIN_ITF_TOTAL
-};
-static_assert(MIN_ITF_NET == ITF_NUM_NET && MIN_ITF_HID_KBD == ITF_NUM_HID_KBD,
-              "MINIMAL must keep NCM/kbd on the same interface numbers as FULL");
-//   Config descriptor                 9
-//   Inert pad (IAD + 3 vendor itfs)   DS5_INERT_PAD_DESC_LEN (35)
-//   Dummy HID interface + HID + EP    25
-//   CDC-NCM block                     TUD_CDC_NCM_DESC_LEN (85)
-//   Kbd interface + HID + EP          25
-#define CONFIG_DESC_LEN_MINIMAL (9 + DS5_INERT_PAD_DESC_LEN + 25 \
-                                 + TUD_CDC_NCM_DESC_LEN + 25)
-uint8_t descriptor_configuration_minimal[CONFIG_DESC_LEN_MINIMAL] = {
-    // --- CONFIGURATION DESCRIPTOR ---
-    0x09, // bLength
-    0x02, // bDescriptorType (CONFIGURATION)
-    U16_TO_U8S_LE(CONFIG_DESC_LEN_MINIMAL), // wTotalLength
-    MIN_ITF_TOTAL, // bNumInterfaces
-    0x01, // bConfigurationValue: 1
-    0x00, // iConfiguration: 0
-    0xE0, // bmAttributes: SELF-POWERED + REMOTE-WAKEUP (must keep for wake)
-    0xFA, // bMaxPower: 500mA
-
-    // Interfaces 0-2: inert vendor padding (one IAD-grouped WinUSB function) so
-    // NCM lands on interface 4-5 as in FULL.
-    DS5_INERT_PAD_DESC(MIN_ITF_INERT0),
-    // Interface 3: dummy HID placeholder (HID instance 0, keeps kbd at instance 1).
-    DS5_DUMMY_HID_ITF_DESC(MIN_ITF_DUMMY_HID),
-    // Interfaces 4-5: CDC-NCM, SAME bytes/number as FULL (single source DS5_NCM_DESC).
-    DS5_NCM_DESC(MIN_ITF_NET),
-    // Interface 6: boot keyboard (HID instance 1).
-    DS5_KBD_ITF_DESC(MIN_ITF_HID_KBD),
-};
-#else // ENABLE_WAKE_HID && !ENABLE_WEBCONFIG -- legacy kbd-only minimal
 #define CONFIG_DESC_LEN_MINIMAL (9 + 25 + 25)
 uint8_t descriptor_configuration_minimal[CONFIG_DESC_LEN_MINIMAL] = {
     // --- CONFIGURATION DESCRIPTOR ---
@@ -632,7 +500,6 @@ uint8_t descriptor_configuration_minimal[CONFIG_DESC_LEN_MINIMAL] = {
     // Interface 1: boot keyboard (HID instance 1).
     DS5_KBD_ITF_DESC(1),
 };
-#endif
 static_assert(sizeof(descriptor_configuration_minimal) == CONFIG_DESC_LEN_MINIMAL,
               "descriptor_configuration_minimal size mismatch");
 
@@ -1250,12 +1117,6 @@ static char const *string_desc_arr[] =
     "Sony Interactive Entertainment", // 1: Manufacturer
     NULL, // 2: Product
     NULL, // 3: Serials will use unique ID if possible
-#ifdef ENABLE_WEBCONFIG
-    NULL, // STRID_NET: intentionally no string -- a function/interface name
-          //   only makes Windows show "<manufacturer> <name>", and the Sony
-          //   manufacturer prefix is unavoidable. Slot kept to align STRID_MAC.
-    NULL, // STRID_MAC: generated in the callback (required by NCM)
-#endif
 };
 
 static uint16_t _desc_str[60 + 1];
@@ -1282,18 +1143,6 @@ uint16_t const *tud_descriptor_string_cb(uint8_t index, uint16_t langid) {
             chr_count = board_usb_get_serial(_desc_str + 1, 32);
             break;
 
-#ifdef ENABLE_WEBCONFIG
-        case STRID_MAC: {
-            // MAC the host NIC should use, 12 hex chars (CDC-ECM/NCM convention).
-            extern uint8_t tud_network_mac_address[6];
-            chr_count = 0;
-            for (int i = 0; i < 6; i++) {
-                _desc_str[1 + chr_count++] = "0123456789ABCDEF"[(tud_network_mac_address[i] >> 4) & 0xf];
-                _desc_str[1 + chr_count++] = "0123456789ABCDEF"[tud_network_mac_address[i] & 0xf];
-            }
-            break;
-        }
-#endif
 
         default:
             // Note: the 0xEE index string is a Microsoft OS 1.0 Descriptors.
@@ -1417,14 +1266,8 @@ uint16_t const *tud_descriptor_string_cb(uint8_t index, uint16_t langid) {
 }
 
 uint8_t const desc_bos_full[]    = DS5_DESC_BOS(MS_OS_20_DESC_LEN_FULL);
-#ifdef ENABLE_WEBCONFIG
-uint8_t const desc_bos_minimal[] = DS5_DESC_BOS(MS_OS_20_DESC_LEN_MINIMAL);
-#endif
 
 uint8_t const *tud_descriptor_bos_cb(void) {
-#ifdef ENABLE_WEBCONFIG
-    if (active_variant == DESC_VARIANT_MINIMAL) return desc_bos_minimal;
-#endif
     return desc_bos_full;
 }
 
@@ -1476,20 +1319,6 @@ uint8_t const desc_ms_os_20_full[] = {
 TU_VERIFY_STATIC(sizeof(desc_ms_os_20_full) == MS_OS_20_DESC_LEN_FULL,
                  "MS OS 2.0 FULL descriptor length mismatch");
 
-#ifdef ENABLE_WEBCONFIG
-// MINIMAL variant: interface 0 is the IAD-grouped inert vendor pad -> ONLY a
-// WinUSB compatible-ID on interface 0, so the pad gets a (driverless) binding and
-// Windows shows no "unknown device" yellow bang for it. No audio subset here:
-// there is no audio function in MINIMAL, and a second subset for itf 0 would make
-// the whole set malformed (the cause of the lingering MI_00 Code 28 bang).
-uint8_t const desc_ms_os_20_minimal[] = {
-    MS_OS_20_SET_AND_CONFIG_HEADER(MS_OS_20_DESC_LEN_MINIMAL,
-                                   MS_OS_20_CONFIG_SUBSET_TOTAL_LEN_MINIMAL),
-    MS_OS_20_WINUSB_FUNC(0),
-};
-TU_VERIFY_STATIC(sizeof(desc_ms_os_20_minimal) == MS_OS_20_DESC_LEN_MINIMAL,
-                 "MS OS 2.0 MINIMAL descriptor length mismatch");
-#endif
 
 // Vendor-class control transfer hook. Windows reads BOS, sees the MS OS 2.0
 // platform capability, then issues this vendor request to fetch the
@@ -1500,18 +1329,12 @@ bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage, tusb_control_requ
     if (request->bRequest == MS_OS_20_VENDOR_CODE && request->wIndex == 7) {
         // wIndex == 7 -> MS_OS_20_DESCRIPTOR_INDEX
         // Serve the set matching the variant the host is currently enumerating.
-        // Only MINIMAL carries the WinUSB tag on interface 0 (the inert pad);
+        // Only MINIMAL carried the WinUSB tag on interface 0 (the inert pad);
         // FULL must NOT, or Windows binds WinUSB to the audio control interface
-        // and bangs it (Code 28). The WinUSB-bearing MINIMAL set only exists with
-        // ENABLE_WEBCONFIG (the inert pad is a webconfig-only construct).
+        // and bangs it (Code 28). The WinUSB-bearing MINIMAL set was an NCM-era
+        // construct and is gone with the NCM transport.
         const uint8_t *set = desc_ms_os_20_full;
         size_t set_len = sizeof(desc_ms_os_20_full);
-#ifdef ENABLE_WEBCONFIG
-        if (active_variant == DESC_VARIANT_MINIMAL) {
-            set = desc_ms_os_20_minimal;
-            set_len = sizeof(desc_ms_os_20_minimal);
-        }
-#endif
         return tud_control_xfer(rhport, request, (void *)(uintptr_t)set, set_len);
     }
     return false;

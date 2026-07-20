@@ -103,14 +103,11 @@
 #define CFG_TUD_HID               MULTI_SLOT_COUNT
 #endif
 #define CFG_TUD_CDC               0
-// CDC-NCM network interface carrying the onboard config web UI (ENABLE_WEBCONFIG,
-// default on in release). Diagnostics go over UART0 (GP0 TX, 115200 8N1), never
-// USB-CDC -- USB serial perturbed the very USB timing we needed to measure.
-#ifdef ENABLE_WEBCONFIG
-#define CFG_TUD_NCM               1
-#else
+// No network class: the config web UI moved to the onboard WiFi (wifi_net.cpp)
+// so the USB face stays pure DualSense. Diagnostics go over UART0 (GP0 TX,
+// 115200 8N1), never USB-CDC -- USB serial perturbed the very USB timing we
+// needed to measure.
 #define CFG_TUD_NCM               0
-#endif
 #define CFG_TUD_ECM_RNDIS         0
 #define CFG_TUD_MSC               0
 #define CFG_TUD_MIDI              0

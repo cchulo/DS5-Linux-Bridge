@@ -2,12 +2,10 @@
 // wifi_net.h -- onboard CYW43 Wi-Fi (STA mode) transport for the config web UI
 // + Wake-on-LAN (ENABLE_WIFI_WOL).
 //
-// Ported from kungaa/DS5-Linux-Bridge. MIGRATION NOTE: during the NCM->WiFi
-// transition this transport runs ALONGSIDE the USB-NCM one (usb_net.cpp); the
-// shared lwIP stack is initialised by cyw43_arch_init() (CYW43_LWIP=1) and the
-// httpd handlers live in usb_net.cpp until they move to a factored web_api
-// layer. NCM keeps netif_default, so everything here addresses the CYW43 STA
-// netif explicitly.
+// Ported from kungaa/DS5-Linux-Bridge. The ONLY config transport -- the
+// USB-NCM one was removed in migration phase 4 so the USB face stays pure
+// DualSense. lwIP is initialised by cyw43_arch_init() (CYW43_LWIP=1); the
+// httpd content lives in web_api.cpp.
 //
 // Needs NO extra hardware: the radio is the same CYW43 chip BTstack already
 // drives, and its WiFi firmware is already linked into the image. BT and WiFi
@@ -35,7 +33,7 @@ void wifi_net_request_ap_onboarding();
 //     onboarding page so the user can pick a network and save credentials.
 // Call once after cyw43_arch_init() and config_load() (main.cpp). lwIP itself is
 // already initialised by cyw43_arch_init() (CYW43_LWIP=1) -- do NOT lwip_init().
-// In AP mode this also starts httpd (usb_net_init() is skipped there).
+// Starts httpd (web_api_init) in both modes.
 void wifi_net_init();
 
 // True once the device is running the AP onboarding portal (not STA). The web

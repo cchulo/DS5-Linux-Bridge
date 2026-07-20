@@ -185,7 +185,7 @@ Useful options:
 | `MULTI_SLOT_COUNT` | `4` | Concurrent controller slots (1-4). |
 | `ENABLE_LED_STRIP` | `OFF` | WS2812B controller-status LEDs via PIO. |
 | `LED_STRIP_GPIO` | `28` | GPIO for the strip's data line. |
-| `ENABLE_WEBCONFIG` | `ON` | On-device config web page. |
+| `ENABLE_WIFI_WOL` | `ON` | On-device config web page over WiFi + Wake-on-LAN. |
 | `ENABLE_BATT_LED` | `ON` | Onboard-LED low-battery blink. |
 | `ENABLE_VERBOSE` | `OFF` | Louder UART logs. |
 

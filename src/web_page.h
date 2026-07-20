@@ -1,7 +1,7 @@
 #ifndef DS5_BRIDGE_WEB_PAGE_H
 #define DS5_BRIDGE_WEB_PAGE_H
 
-// Config UI served at http://10.55.55.105/ (default subnet; selectable in the UI).
+// Config UI served over WiFi at http://ds5.local/ (see wifi_net.cpp).
 // Single self-contained page; loads from GET /api/config and persists via
 // POST /api/config. Settings mirror Config_body (src/config.h); the firmware
 // re-validates every field, so the page is a convenience, not the source of
@@ -259,29 +259,13 @@ footer .kofi:hover{text-decoration:none;opacity:.9}
 
 <section class="pane" id="pane_network">
 
-<div class="field">
-  <label class="lbl">Config page address</label>
-  <select id="webconfig_subnet">
-    <option value="0">10.55.55.105 (default)</option>
-    <option value="1">172.31.55.105</option>
-    <option value="2">192.168.137.105</option>
-    <option value="3">Custom…</option>
-  </select>
-  <div class="hint">Where this page is served. Change only if it collides with
-  your network — or to give each of several adapters on one PC its own address.
-  Takes effect after you unplug and replug the adapter — then browse to the new
-  address.</div>
-  <div id="customip_wrap" style="display:none;margin-top:.5rem">
-    <input id="webconfig_custom_ip" type="text" inputmode="decimal"
-           placeholder="e.g. 10.20.30.105" pattern="\d{1,3}(\.\d{1,3}){3}">
-    <div class="hint">⚠️ <b>Advanced.</b> Must be a <b>private</b> address
-    (<code>10.x.x.x</code>, <code>172.16–31.x.x</code>, or
-    <code>192.168.x.x</code>), and not a <code>.0</code>/<code>.255</code>. If
-    you enter something unreachable the adapter falls back to the default
-    address — you won't get locked out, but you may not land where you expected.
-    The PC gets a DHCP lease in the same <code>/29</code> block.</div>
-  </div>
-</div>
+<div class="hint" style="margin-top:1rem">This page is served over your home
+  WiFi at <b>http://ds5.local/</b> (the USB network adapter of older firmware
+  is gone — the adapter now looks like a plain DualSense over USB). To move
+  the adapter to a different WiFi network, use the <b>WiFi setup</b> button
+  below: it reboots into the <b>DS5-Setup-XXXX</b> setup network (password
+  <b>dualsense</b>). Wake-on-LAN settings will live here in a coming
+  firmware.</div>
 
 </section>
 
@@ -328,11 +312,8 @@ function bindRange(id,out){const el=$(id);const fn=()=>$(out).textContent=el.val
 const upd=[bindRange('audio_buffer_length','ab_val'),bindRange('inactive_time','it_val')];
 
 function markDirty(){$('save').disabled=false;setStatus('unsaved changes','dirty')}
-['controller_mode','polling_rate_mode','disable_inactive_disconnect','disable_pico_led','player_led_lock','lightbar_override','lightbar_filter_rgb','webconfig_subnet','idle_rgb']
+['controller_mode','polling_rate_mode','disable_inactive_disconnect','disable_pico_led','player_led_lock','lightbar_override','lightbar_filter_rgb','idle_rgb']
   .forEach(id=>$(id).onchange=markDirty);
-function toggleCustomIp(){$('customip_wrap').style.display=$('webconfig_subnet').value==='3'?'':'none'}
-$('webconfig_subnet').addEventListener('change',toggleCustomIp);
-$('webconfig_custom_ip').oninput=markDirty;
 
 async function load(){
   try{
@@ -347,10 +328,6 @@ async function load(){
     $('player_led_lock').checked=!c.disable_player_led_lock;
     $('lightbar_override').checked=!c.disable_lightbar_override;
     if(c.lightbar_filter_rgb)$('lightbar_filter_rgb').value='#'+c.lightbar_filter_rgb.toLowerCase();
-    $('webconfig_subnet').value=c.webconfig_subnet;
-    if(c.webconfig_custom_ip&&c.webconfig_custom_ip!=='0.0.0.0')
-      $('webconfig_custom_ip').value=c.webconfig_custom_ip;
-    toggleCustomIp();
     const sc=$('slot_colors');
     if(sc.children.length===0){
       for(let i=0;i<(c.max_slots||4);i++){
@@ -389,9 +366,7 @@ async function save(){
     'disable_pico_led='+($('disable_pico_led').checked?1:0),
     'disable_player_led_lock='+($('player_led_lock').checked?0:1),
     'disable_lightbar_override='+($('lightbar_override').checked?0:1),
-    'lightbar_filter_rgb='+$('lightbar_filter_rgb').value.slice(1),
-    'webconfig_subnet='+$('webconfig_subnet').value,
-    'webconfig_custom_ip='+encodeURIComponent($('webconfig_custom_ip').value.trim())
+    'lightbar_filter_rgb='+$('lightbar_filter_rgb').value.slice(1)
   ];
   for(let i=0;i<4;i++){
     const el=$('slot_rgb'+i);

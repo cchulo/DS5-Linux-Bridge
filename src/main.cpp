@@ -19,7 +19,6 @@
 
 #include "config.h"
 #include "dse.h"
-#include "usb_net.h"
 #include "web_api.h"
 #include "wifi_net.h"
 #include "tier.h"
@@ -521,26 +520,17 @@ int main() {
     while (true) tight_loop_contents();
   }
 
-  // Load persisted config from flash BEFORE usb_net_init()/wifi_net_init():
-  // the web server picks its subnet from get_config().webconfig_subnet and the
-  // WiFi transport reads the stored credentials (STA vs AP onboarding) + mDNS
-  // hostname, so the saved values must be in place first.
+  // Load persisted config from flash BEFORE wifi_net_init(): it reads the
+  // stored WiFi credentials (STA vs AP onboarding) and the mDNS hostname, so
+  // the saved values must be in place first.
   config_load();
 
-  // Bring up the WiFi transport (no-op with ENABLE_WIFI_WOL off). Decides STA
-  // (provisioned: join the home WLAN, async) vs AP + captive portal
-  // (unprovisioned onboarding). In WiFi builds the SDK's cyw43_arch_init()
-  // above already brought lwIP up (CYW43_LWIP=1).
-  wifi_net_init();
-
-  // Bring up the onboard config web server (USB CDC-NCM + lwIP). No-op when
-  // ENABLE_WEBCONFIG is off. Skipped during AP onboarding: that mode is a
-  // dedicated setup network (portal + httpd started by wifi_net_init), and
-  // the NCM netif must not compete for netif_default with the AP netif.
+  // Bring up the WiFi transport + config web server (no-op with
+  // ENABLE_WIFI_WOL off). Decides STA (provisioned: join the home WLAN,
+  // async) vs AP + captive portal (unprovisioned onboarding). In WiFi builds
+  // the SDK's cyw43_arch_init() above already brought lwIP up (CYW43_LWIP=1).
   // Diagnostics print to UART0 (GP0 TX, 115200 8N1), not USB.
-  if (!wifi_net_in_ap_mode()) {
-    usb_net_init();
-  }
+  wifi_net_init();
 
   // Power-On Self Test (POST) LED pattern: 3 rapid flashes to confirm
   // successful CPU overclocking and CYW43 Bluetooth module initialization.
@@ -636,13 +626,15 @@ int main() {
   // suspends is also what makes remote-wakeup possible.
   //
   // NEVER in AP onboarding mode. Unlike upstream (whose onboarding enumerates
-  // an inert MINIMAL device), our FULL face exposes audio + NCM + gamepad
-  // interfaces whose backing state (audio_init, state_init, usb_net_init) was
-  // deliberately skipped above -- the host's first NCM frame hit the NULL
-  // netif input fn: hard fault -> watchdog -> re-enumerate, a crash/replug
-  // storm that bootlooped the dongle and took the host's USB stack with it
-  // (HW-observed on SteamOS). During onboarding USB is power only; the
-  // device is configured over the portal and reboots into STA when done.
+  // an inert MINIMAL device), our FULL face exposes audio + gamepad
+  // interfaces whose backing state (audio_init, state_init) was deliberately
+  // skipped above. In the NCM era the host's first ethernet frame hit the
+  // NULL netif input fn: hard fault -> watchdog -> re-enumerate, a
+  // crash/replug storm that bootlooped the dongle and took the host's USB
+  // stack with it (HW-observed on SteamOS). The uninitialised audio/HID
+  // state is the same class of trap, so the rule stands with NCM gone:
+  // during onboarding USB is power only; the device is configured over the
+  // portal and reboots into STA when done.
   if (!ap_onboarding) {
     tud_connect();
   }
@@ -689,11 +681,9 @@ int main() {
 #ifdef ENABLE_WAKE_HID
     usb_variant_task();
 #endif
-    // Service lwIP timers for the onboard config web server (no-op when
-    // ENABLE_WEBCONFIG is off). Cheap; not in the audio hot path.
-    usb_net_task();
-    // WiFi STA link supervision + mDNS registration + deferred reboots
-    // (no-op with ENABLE_WIFI_WOL off). RX is pumped by cyw43_arch_poll().
+    // WiFi STA link supervision + lwIP timers + mDNS registration + deferred
+    // reboots (no-op with ENABLE_WIFI_WOL off). RX is pumped by
+    // cyw43_arch_poll(). Cheap; not in the audio hot path.
     wifi_net_task();
     // Deferred web actions (BOOTSEL flash-mode reboot), transport-agnostic.
     web_api_task();

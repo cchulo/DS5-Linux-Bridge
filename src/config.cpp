@@ -14,7 +14,6 @@
 #include "pico/flash.h" // flash_safe_execute(): park core1 during the flash op
 #include "pico/multicore.h" // lockout-victim probe: direct-write save in AP mode
 #include "pico/btstack_flash_bank.h" // PICO_FLASH_BANK_STORAGE_OFFSET (collision guard)
-#include "usb_net.h" // WEBCONFIG_SUBNET_COUNT (subnet-index bound, always defined)
 #include "utils.h"
 
 constexpr uint32_t CONFIG_MAGIC = 0x66ccff00;
@@ -167,18 +166,9 @@ void config_valid() {
     body->controller_mode = 2;
     printf("[Config] controller_mode is invalid\n");
   }
-  if (body->webconfig_subnet > WEBCONFIG_SUBNET_MAX) {
-    body->webconfig_subnet = 0; // default: 10.55.55.x
-    printf("[Config] webconfig_subnet is invalid\n");
-  }
-  // If "custom IP" is selected, the stored address must be a valid private host
-  // address; otherwise fall back to the default preset so the page stays
-  // reachable (this is the safety net behind the custom-IP YOLO option).
-  if (body->webconfig_subnet == WEBCONFIG_SUBNET_CUSTOM &&
-      !webconfig_ip_is_valid(body->webconfig_custom_ip)) {
-    body->webconfig_subnet = 0;
-    printf("[Config] webconfig_custom_ip invalid; using default preset\n");
-  }
+  // webconfig_subnet / webconfig_custom_ip are reserved (NCM-era, unread by
+  // any current transport -- see config.h). No validation: nothing consumes
+  // them, and blobs written by NCM-era firmware keep their bytes untouched.
   // Feature snapshot: sanity-check the stored lengths; anything out of range
   // invalidates the snapshot (it re-captures from the next controller).
   if (body->feature_snapshot_valid) {

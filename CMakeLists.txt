@@ -83,16 +83,13 @@ message(STATUS "DS5-Linux-Bridge build target -- WAVESHARE_RP2350B_PLUS_W_BUILD=
 # no USB-CDC serial. USB serial was removed because it perturbed the very USB
 # timing it was meant to diagnose (and was unreliable). See README "Debugging".
 
-# Onboard web config UI over a USB CDC-NCM network interface. Default ON.
-option(ENABLE_WEBCONFIG "Serve the config web page over a USB network interface" ON)
-
 # WiFi transport (STA mode on the onboard CYW43 -- the same chip BTstack
-# drives; the WiFi firmware blob is already in the image) + Wake-on-LAN +
-# first-boot captive-portal onboarding. Ported from kungaa/DS5-Linux-Bridge.
-# MIGRATION (NCM->WiFi): runs ALONGSIDE the NCM transport for bring-up; the
-# httpd content handlers still live in usb_net.cpp, so this currently
-# REQUIRES ENABLE_WEBCONFIG (enforced below). Sets CYW43_LWIP=1 so the SDK's
-# cyw43_arch owns lwIP and wires it to the WiFi netif.
+# drives; the WiFi firmware blob is already in the image): config web UI,
+# first-boot captive-portal onboarding, Wake-on-LAN. Ported from
+# kungaa/DS5-Linux-Bridge. The ONLY config transport -- the USB-NCM one was
+# removed (migration phase 4) so the USB face stays pure DualSense. Sets
+# CYW43_LWIP=1 so the SDK's cyw43_arch owns lwIP and wires it to the WiFi
+# netif. OFF = no web UI at all.
 option(ENABLE_WIFI_WOL "Serve the config page + send Wake-on-LAN over the onboard CYW43 Wi-Fi (STA mode)" ON)
 if (ENABLE_WIFI_WOL)
     set(CYW43_LWIP_VALUE 1)
@@ -165,33 +162,9 @@ add_executable(ds5-bridge
 set_source_files_properties(src/ram_mem.c PROPERTIES COMPILE_OPTIONS
         "-fno-builtin;-fno-tree-loop-distribute-patterns")
 
-# The web UI itself (config page + JSON API + captive portal, web_api.cpp) is
-# transport-agnostic: compiled whenever at least one transport (NCM or WiFi)
-# can serve it.
-if (ENABLE_WEBCONFIG OR ENABLE_WIFI_WOL)
-    target_sources(ds5-bridge PRIVATE src/web_api.cpp)
-    target_link_libraries(ds5-bridge
-            pico_unique_id
-            pico_lwip_nosys
-            pico_lwip_http
-    )
-endif ()
-
-if (ENABLE_WEBCONFIG)
-    target_sources(ds5-bridge PRIVATE
-            src/usb_net.cpp
-            # TinyUSB's tiny DHCP server, used to hand the host an address on
-            # the USB NCM link.
-            ${PICO_TINYUSB_PATH}/lib/networking/dhserver.c
-    )
-    target_include_directories(ds5-bridge PRIVATE
-            ${PICO_TINYUSB_PATH}/lib/networking
-    )
-    target_compile_definitions(ds5-bridge PRIVATE ENABLE_WEBCONFIG)
-endif ()
-
 if (ENABLE_WIFI_WOL)
     target_sources(ds5-bridge PRIVATE
+            src/web_api.cpp
             src/wifi_net.cpp
             # Onboarding captive portal (AP mode): tiny DHCP + DNS servers so a
             # phone gets a lease and every lookup resolves to the portal page.
@@ -212,6 +185,9 @@ if (ENABLE_WIFI_WOL)
             WIFI_AP_SETUP_PSK="${WIFI_SETUP_PSK}"
     )
     target_link_libraries(ds5-bridge
+            pico_unique_id   # AP SSID suffix (DS5-Setup-XXXX)
+            pico_lwip_nosys
+            pico_lwip_http
             pico_lwip_mdns   # <hostname>.local discovery on the home LAN
     )
 endif ()
@@ -327,8 +303,8 @@ target_compile_definitions(ds5-bridge PRIVATE
         # One-time effect: bonds stored at the old location are lost once.
         PICO_FLASH_BANK_STORAGE_OFFSET=\(PICO_FLASH_SIZE_BYTES-3*FLASH_SECTOR_SIZE\)
         # WiFi builds hand lwIP to the SDK's cyw43_arch (it creates/owns the
-        # WiFi netif and calls lwip_init); NCM-only builds keep lwIP manual
-        # (usb_net.cpp calls lwip_init itself).
+        # WiFi netif and calls lwip_init); with ENABLE_WIFI_WOL off there is
+        # no lwIP at all.
         CYW43_LWIP=${CYW43_LWIP_VALUE}
         # 0 (not 1): flash_safe_execute() must really park core1 while flash is
         # erased/programmed (config_save). With =1 the lockout is skipped and the
@@ -369,7 +345,10 @@ endif()
 # haunted every local pico2_w build until 2026-07-19, which is exactly the
 # confusion the auto stamp exists to prevent.
 # Semver base for this fork. Bump by hand on meaningful milestones.
-set(DS5_BASE_VERSION "0.1.0")
+# 0.2.0: NCM transport removed -- config page is WiFi-only, USB face is pure
+#        DualSense (breaking for NCM-era clients; the Decky plugin should
+#        discover via ds5.local from here on).
+set(DS5_BASE_VERSION "0.2.0")
 # Auto version: "<semver>-<build minute UTC>", e.g. 0.1.0-20260720-0142.
 # Minute-sensitive so a flashed image is never ambiguous; the stamped UF2
 # copy below carries the same string in its filename. Configure-time, and

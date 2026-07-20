@@ -2,7 +2,7 @@
 // See weblog.h. A pico stdio driver whose out_chars records the stream two
 // ways: the FIRST KB of output is frozen forever (boot diagnostics -- [MEM],
 // [Audio] heap, [FLASHBANK] -- must survive hours of HCI chatter), and a
-// rolling ring keeps the most recent KB. /api/log (usb_net.cpp) serves
+// rolling ring keeps the most recent KB. /api/log (web_api.cpp) serves
 // boot section + gap marker + recent tail. Registered alongside the UART
 // driver, so GP0 output is unaffected.
 //

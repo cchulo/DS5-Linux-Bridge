@@ -12,11 +12,10 @@
 //     cyw43_arch_poll() already in the main loop. We just join the WLAN and
 //     start DHCP.
 //   - lwIP is initialised by cyw43_arch_init() (lwip_nosys_init -> lwip_init),
-//     so we MUST NOT call lwip_init() here, or lwIP double-inits. (usb_net.cpp
-//     skips its own lwip_init() in this build for the same reason.)
-//   - DUAL TRANSPORT (migration): the NCM netif keeps netif_default so its DHCP
-//     server broadcasts keep working. Everything here must therefore address
-//     the STA netif EXPLICITLY (sta_netif()) -- never netif_default.
+//     so we MUST NOT call lwip_init() here, or lwIP double-inits.
+//   - Everything here addresses the STA netif EXPLICITLY (sta_netif()) rather
+//     than netif_default -- a habit from the NCM-migration era (another netif
+//     owned default then) that stays because it is simply more precise.
 //   - The ARP resolve must be a start/poll split serviced from the main loop,
 //     never blocked inside the httpd POST callback (see the resolve section).
 //
@@ -47,7 +46,7 @@
 #include "config.h"
 #include "web_api.h"
 
-// The CYW43 STA netif, addressed explicitly (see the dual-transport note).
+// The CYW43 STA netif, addressed explicitly (see the header note).
 static struct netif *sta_netif() { return &cyw43_state.netif[CYW43_ITF_STA]; }
 
 //--------------------------------------------------------------------+
@@ -70,8 +69,9 @@ bool wifi_wol_send(const uint8_t mac[6]) {
 
     ip_addr_t bcast;
     IP4_ADDR(&bcast, 255, 255, 255, 255);
-    // Explicit egress netif: a global broadcast would otherwise route via
-    // netif_default, which the NCM transport owns during the migration.
+    // Explicit egress netif: a global broadcast routes via netif_default,
+    // and pinning the STA netif keeps this correct no matter who owns default
+    // (the AP netif does during onboarding, for instance).
     const err_t e = udp_sendto_if(pcb, p, &bcast, 9, sta_netif());
 
     pbuf_free(p);
@@ -191,8 +191,8 @@ static bool wifi_mdns_added = false;   // STA: mDNS netif registered once
 // tuned to this /29). The /29 caps the pool at 5 client slots so nobody can
 // cram a crowd of stations onto the single radio and starve BT/audio. The DNS
 // server answers every lookup with .105 so the captive-portal sheet pops on the
-// phone. (Same subnet as the NCM default preset -- never both live at once:
-// AP mode skips usb_net_init().)
+// phone. (Historical note: the same 10.55.55.x was the NCM-era default, so
+// docs and muscle memory carry over.)
 #define AP_GW_A 10
 #define AP_GW_B 55
 #define AP_GW_C 55
@@ -315,8 +315,7 @@ static void wifi_ap_init(void) {
     // though we never joined) and the AP netif present, netif_default can be the
     // wrong (STA, link-down) interface -> the ACK never reaches the client and it
     // loops REQUEST forever. Pinning default to the AP netif fixes egress for the
-    // DHCP + DNS replies. (usb_net_init() is skipped in AP mode, so the NCM netif
-    // never competes for default here.)
+    // DHCP + DNS replies.
     netif_set_default(apn);
 
     // DHCP + DNS servers so a phone gets a lease and every lookup resolves to us
@@ -486,9 +485,8 @@ void wifi_net_init() {
 }
 
 void wifi_net_task() {
-    // lwIP timers. Unconditional: in a WiFi-only build (ENABLE_WEBCONFIG off)
-    // and in AP mode nothing else pumps them; in the dual-transport build
-    // usb_net_task() also calls this, which is a harmless cheap double-check.
+    // lwIP timers: nothing else pumps them (RX and the netif are serviced by
+    // cyw43_arch_poll()).
     sys_check_timeouts();
 
     // Provisioning/reset reboots are deferred so the HTTP response can flush

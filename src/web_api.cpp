@@ -4,7 +4,7 @@
 // handlers answer over the USB-NCM netif and the CYW43 WiFi netif; lwIP has
 // one httpd regardless of how many netifs feed it.
 //
-// Factored out of usb_net.cpp (NCM->WiFi migration phase 2), mirroring
+// Factored out of the retired NCM transport (migration phase 2), mirroring
 // upstream kungaa's web_api split. The POST machinery carries upstream's
 // hardening: a body-less POST can't strstr() a previous request's leftovers,
 // and a partial body (client died mid-POST) is rejected instead of applied.
@@ -12,7 +12,7 @@
 
 #include "web_api.h"
 
-#if defined(ENABLE_WEBCONFIG) || defined(ENABLE_WIFI_WOL)
+#ifdef ENABLE_WIFI_WOL
 
 #include <cstdio>
 #include <cstdlib>
@@ -27,7 +27,6 @@
 
 #include "bt.h"
 #include "tier.h"
-#include "usb_net.h" // WEBCONFIG_SUBNET_* bounds for the NCM address selector
 #ifdef ENABLE_LED_STRIP
 #include "ledstrip.h"
 #endif
@@ -79,8 +78,6 @@ static int json_config(char *out, size_t cap) {
                     "\"polling_rate_mode\":%u,"
                     "\"audio_buffer_length\":%u,"
                     "\"controller_mode\":%u,"
-                    "\"webconfig_subnet\":%u,"
-                    "\"webconfig_custom_ip\":\"%u.%u.%u.%u\","
                     "\"slot_rgb\":[\"%02X%02X%02X\",\"%02X%02X%02X\","
                     "\"%02X%02X%02X\",\"%02X%02X%02X\"],"
                     "\"led_count\":%u,"
@@ -100,9 +97,6 @@ static int json_config(char *out, size_t cap) {
                     c.polling_rate_mode,
                     c.audio_buffer_length,
                     c.controller_mode,
-                    c.webconfig_subnet,
-                    c.webconfig_custom_ip[0], c.webconfig_custom_ip[1],
-                    c.webconfig_custom_ip[2], c.webconfig_custom_ip[3],
                     c.slot_rgb[0][0], c.slot_rgb[0][1], c.slot_rgb[0][2],
                     c.slot_rgb[1][0], c.slot_rgb[1][1], c.slot_rgb[1][2],
                     c.slot_rgb[2][0], c.slot_rgb[2][1], c.slot_rgb[2][2],
@@ -519,8 +513,6 @@ static void apply_post(char *body) {
             c.audio_buffer_length = (uint8_t) clampi(val, 16, 128);
         } else if (strcmp(tok, "controller_mode") == 0) {
             c.controller_mode = (uint8_t) clampi(val, 0, 2);
-        } else if (strcmp(tok, "webconfig_subnet") == 0) {
-            c.webconfig_subnet = (uint8_t) clampi(val, 0, WEBCONFIG_SUBNET_MAX);
         } else if (strcmp(tok, "disable_player_led_lock") == 0) {
             c.disable_player_led_lock = val ? 1 : 0;
         } else if (strcmp(tok, "disable_lightbar_override") == 0) {
@@ -588,18 +580,9 @@ static void apply_post(char *body) {
                     c.slot_rgb[idx][2] = (uint8_t) v;
                 }
             }
-        } else if (strcmp(tok, "webconfig_custom_ip") == 0) {
-            // Dotted-quad "a.b.c.d" (dots aren't URL-encoded). Parse leniently;
-            // config_valid() is the real gate and rejects non-private addresses.
-            unsigned a = 0, b = 0, cc = 0, d = 0;
-            if (sscanf(eq, "%u.%u.%u.%u", &a, &b, &cc, &d) == 4 &&
-                a <= 255 && b <= 255 && cc <= 255 && d <= 255) {
-                c.webconfig_custom_ip[0] = (uint8_t) a;
-                c.webconfig_custom_ip[1] = (uint8_t) b;
-                c.webconfig_custom_ip[2] = (uint8_t) cc;
-                c.webconfig_custom_ip[3] = (uint8_t) d;
-            }
         }
+        // webconfig_subnet / webconfig_custom_ip are no longer accepted: the
+        // NCM transport is gone and the fields are reserved bytes (config.h).
     }
 
     const bool lock_was_disabled = get_config().disable_player_led_lock;
@@ -783,7 +766,7 @@ static void apply_led_post(char *body) {
 // BOOTSEL button (the pico is screwed into the case). Deferred rather than
 // immediate because rebooting here would kill the USB link before the HTTP
 // response goes out and the page would show a spinner instead of "flash mode".
-// The reboot itself happens in usb_net_task().
+// The reboot itself happens in web_api_task().
 static void apply_reboot_post(char *body) {
     char action[16] = "";
     for (char *tok = strtok(body, "&"); tok; tok = strtok(nullptr, "&")) {
@@ -957,9 +940,8 @@ extern "C" void httpd_post_finished(void *connection, char *response_uri, u16_t 
 //--------------------------------------------------------------------+
 
 void web_api_init() {
-    // One lwIP stack, one httpd listener. With both transports enabled,
-    // usb_net_init() and wifi_net_init() each call this; only the first
-    // starts the server.
+    // One lwIP stack, one httpd listener; guarded in case a future second
+    // caller joins wifi_net_init().
     static bool started = false;
     if (started) return;
     started = true;
@@ -983,4 +965,4 @@ void web_api_task() {
     }
 }
 
-#endif // ENABLE_WEBCONFIG || ENABLE_WIFI_WOL
+#endif // ENABLE_WIFI_WOL

@@ -1,50 +1,34 @@
 #ifndef LWIPOPTS_H
 #define LWIPOPTS_H
 
-// lwIP runs NO_SYS; everything is serviced from the single main loop, so no
-// OS/locking is needed. Transports: the TinyUSB NCM interface (usb_net_task)
-// and -- in ENABLE_WIFI_WOL builds, during the NCM->WiFi migration -- the cyw43
-// WiFi netif as well (cyw43_arch_poll + wifi_net_task). In WiFi builds the
-// stack is initialised by cyw43_arch_init() (CYW43_LWIP=1), not usb_net.
+// lwIP runs NO_SYS over the cyw43 WiFi netif; everything is serviced from the
+// single main loop (cyw43_arch_poll + wifi_net_task), so no OS/locking is
+// needed. The stack is initialised by cyw43_arch_init() (CYW43_LWIP=1). Only
+// ENABLE_WIFI_WOL builds compile lwIP at all -- the NCM-era USB transport is
+// gone (NCM->WiFi migration phase 4).
 #define NO_SYS                      1
 #define LWIP_SOCKET                 0
 #define LWIP_NETCONN                0
 
-// Footprint is kept DELIBERATELY SMALL. This stack serves one ~5 KB config page
-// over a single short-lived HTTP connection; it is NEVER a throughput path.
-// lwIP is always up here (no time-share), so every byte of its static footprint
-// permanently shrinks the heap shared with BTstack (~40 KB at boot) and the
-// Opus codec runtime (~76 KB on controller-connect). The earlier web-scale
-// sizing (MEM_SIZE 8000, PBUF_POOL 8 x 1460 B, 8xMSS windows) cost ~21 KB of
-// BSS and OOM-panicked Opus the moment a controller connected. These values are
-// the minimum that still streams the page: a small MSS keeps each pbuf small,
-// and the extra round-trips are free on both the USB link and the local LAN.
+// Footprint is kept DELIBERATELY SMALL. This stack serves one ~5 KB config
+// page over a single short-lived HTTP connection; it is NEVER a throughput
+// path. lwIP is always up here (no time-share), so every byte of its static
+// footprint permanently shrinks the heap shared with BTstack (~40 KB at boot)
+// and the Opus codec runtime (~76 KB on controller-connect). Sizes are the
+// ones proven on HW (upstream kungaa's WiFi tuning + our phase-3 validation):
+// the cyw43 driver allocates each RX frame from PBUF_POOL at full MTU, so a
+// small pool means the occasional dropped large inbound frame under load --
+// an acceptable trade vs OOM.
 #define MEM_LIBC_MALLOC             0
 #define MEM_ALIGNMENT               4
-#ifdef ENABLE_WIFI_WOL
-// WiFi tuning (values proven on HW by upstream kungaa): the cyw43 driver
-// allocates each RX frame from PBUF_POOL at full MTU, and the STA feature set
-// (DHCP client, mDNS, ARP) needs a little more arena than NCM alone. Upstream's
-// first pass (MEM_SIZE 6000, PBUF_POOL 12) OOM-panicked against the BTstack +
-// Opus heap; these are the sizes that survived. A small pool means the
-// occasional dropped large inbound frame under load -- acceptable vs OOM.
 #define MEM_SIZE                    2400
 #define MEMP_NUM_PBUF               5
 #define PBUF_POOL_SIZE              6   // ~6 * ~600 B = ~3.5 KB
-#else
-#define MEM_SIZE                    1600
-#define MEMP_NUM_PBUF               4
-#define PBUF_POOL_SIZE              4   // 4 * ~600 B (small MSS) ~= 2.4 KB
-#endif
 #define MEMP_NUM_TCP_SEG            14  // must be >= TCP_SND_QUEUELEN (see below)
 #define MEMP_NUM_ARP_QUEUE          2
-#ifdef ENABLE_WIFI_WOL
-// Dual-transport UDP endpoints exceed either fork alone: NCM dhserver + (STA:
-// DHCP client, mDNS, transient WOL send | AP: portal DHCP + DNS servers).
+// UDP endpoints: STA (DHCP client, mDNS, transient WOL send) or AP (portal
+// DHCP + DNS servers), with headroom.
 #define MEMP_NUM_UDP_PCB            6
-#else
-#define MEMP_NUM_UDP_PCB            3
-#endif
 #define MEMP_NUM_TCP_PCB            5   // active conns + a couple lingering TIME_WAIT
 #define MEMP_NUM_TCP_PCB_LISTEN     1   // single httpd listener
 #define TCP_MSL                     1000  // ms (default 60000); short TIME_WAIT linger
@@ -55,16 +39,9 @@
 #define LWIP_RAW                    0
 #define LWIP_UDP                    1
 
-#ifdef ENABLE_WIFI_WOL
-// IP services for the WiFi transport. In STA mode the dongle is a DHCP *client*
-// of the home router and uses mDNS for discovery (<hostname>.local), so it
-// needs DHCP client + IGMP + DNS + the mDNS responder.
-//
-// CAUTION (migration): the NCM-era note below records that enabling IGMP once
-// faulted the NCM setup into a watchdog reboot loop. mDNS is registered ONLY on
-// the STA netif (wifi_net.cpp) and the cyw43 netif carries proper multicast
-// support, but the NCM+IGMP combination is exactly what the dual-transport
-// bring-up (plan Phase 3) must verify on hardware.
+// IP services. In STA mode the dongle is a DHCP *client* of the home router
+// and uses mDNS for discovery (<hostname>.local), so it needs DHCP client +
+// IGMP + DNS + the mDNS responder.
 #define LWIP_DHCP                   1   // DHCP *client*: lease from the home router
 #define LWIP_DNS                    1
 #define LWIP_IGMP                   1   // multicast for mDNS on the LAN link
@@ -87,22 +64,18 @@
 // the window stays open, and the sender retransmits from the gap (go-back-N):
 // slower under loss, can't wedge.
 #define TCP_QUEUE_OOSEQ             0
-#else
-#define LWIP_DHCP                   0   // we are the DHCP *server* (dhserver.c, raw UDP)
-#define LWIP_DNS                    0   // deliberately no DNS: never hijack host lookups
-#define LWIP_IGMP                   0   // no multicast: mDNS removed (never resolved here, see below)
-#endif
 
-// Let ip4_input accept link-layer-addressed packets (src 0.0.0.0) destined for
-// UDP port 67: required for a DHCP *server* to see client DISCOVERs -- both the
-// NCM transport's dhserver and the WiFi onboarding portal's dhcpserver
-// (lib/portal). Harmless for the STA DHCP client (nothing is bound to 67 then).
+// Onboarding AP mode runs a tiny DHCP *server* (lib/portal/dhcpserver.c) so a
+// phone can get a lease and reach the captive portal. The server's bound UDP
+// socket must see client DISCOVERs, which arrive link-layer-addressed from src
+// 0.0.0.0 to port 67; without this, ip4_input drops them and no lease is
+// handed out. Harmless in STA mode (the dongle is then a DHCP client; nothing
+// is bound to 67).
 #define LWIP_IP_ACCEPT_UDP_PORT(p) ((p) == PP_NTOHS(67))
 
-// Small MSS keeps each pbuf-pool buffer small (PBUF_POOL_BUFSIZE tracks MSS), so
-// the pool costs little BSS. The ~5 KB page streams across many small segments;
-// over the low-latency USB link (or the local LAN) the extra round-trips are
-// invisible.
+// Small MSS keeps each pbuf-pool buffer small (PBUF_POOL_BUFSIZE tracks MSS),
+// so the pool costs little BSS. The ~5 KB page streams across many small
+// segments; on the local LAN the extra round-trips are invisible.
 #define TCP_MSS                     536
 #define TCP_WND                     (4 * TCP_MSS)   // ~2.1 KB receive window
 #define TCP_SND_BUF                 (3 * TCP_MSS)   // ~1.6 KB; QUEUELEN ~13, fits SEG=14
@@ -113,14 +86,8 @@
 #define LWIP_NETIF_LINK_CALLBACK    1
 #define LWIP_NETIF_HOSTNAME         1
 
-// NCM-era mDNS note (still true for the NCM netif): without NETIF_FLAG_IGMP it
-// could never join the multicast group, so ds5config.local never resolved here
-// -- and enabling IGMP faulted this NCM setup into a watchdog reboot loop.
-// Users reach the NCM page by IP (http://10.55.55.105/). The WiFi transport
-// registers mDNS on the STA netif only (see the CAUTION above).
-
 // HTTP server: all content is generated in fs_open_custom / the POST hooks
-// (usb_net.cpp); the static fsdata table is empty (pico_fsdata.inc).
+// (web_api.cpp); the static fsdata table is empty (pico_fsdata.inc).
 #define LWIP_HTTPD_CUSTOM_FILES     1
 #define LWIP_HTTPD_DYNAMIC_HEADERS  0     // responses carry their own headers
 #define LWIP_HTTPD_SUPPORT_POST     1
