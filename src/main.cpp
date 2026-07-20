@@ -20,6 +20,7 @@
 #include "config.h"
 #include "dse.h"
 #include "usb_net.h"
+#include "web_api.h"
 #include "wifi_net.h"
 #include "tier.h"
 
@@ -694,6 +695,8 @@ int main() {
     // WiFi STA link supervision + mDNS registration + deferred reboots
     // (no-op with ENABLE_WIFI_WOL off). RX is pumped by cyw43_arch_poll().
     wifi_net_task();
+    // Deferred web actions (BOOTSEL flash-mode reboot), transport-agnostic.
+    web_api_task();
     audio_loop();
     interrupt_loop();
     // DSE Edge profile snapshot prefetch/unlock state machine.

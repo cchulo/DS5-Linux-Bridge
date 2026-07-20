@@ -40,12 +40,12 @@
 #include "lwip/etharp.h"
 #include "lwip/udp.h"
 #include "lwip/apps/mdns.h"
-#include "lwip/apps/httpd.h"
 
 #include "dhcpserver.h"
 #include "dnsserver.h"
 
 #include "config.h"
+#include "web_api.h"
 
 // The CYW43 STA netif, addressed explicitly (see the dual-transport note).
 static struct netif *sta_netif() { return &cyw43_state.netif[CYW43_ITF_STA]; }
@@ -324,11 +324,6 @@ static void wifi_ap_init(void) {
     dhcp_server_init(&ap_dhcp, &gw, &mask);
     dns_server_init(&ap_dns, &gw);
 
-    // usb_net_init() is skipped in AP mode, so start httpd here; the handlers
-    // (fs_open_custom + POST hooks, usb_net.cpp) serve the portal page when
-    // wifi_net_in_ap_mode() is true.
-    httpd_init();
-
     printf("[wifi] AP onboarding: join \"%s\" (password \"%s\") then browse to http://%u.%u.%u.%u/\n",
            ap_ssid, WIFI_AP_SETUP_PSK, AP_GW_A, AP_GW_B, AP_GW_C, AP_GW_D);
 }
@@ -487,15 +482,18 @@ void wifi_net_init() {
     } else {
         wifi_sta_init();      // normal operation
     }
+    web_api_init(); // idempotent; serves portal (AP) or config page (STA)
 }
 
 void wifi_net_task() {
+    // lwIP timers. Unconditional: in a WiFi-only build (ENABLE_WEBCONFIG off)
+    // and in AP mode nothing else pumps them; in the dual-transport build
+    // usb_net_task() also calls this, which is a harmless cheap double-check.
+    sys_check_timeouts();
+
     // Provisioning/reset reboots are deferred so the HTTP response can flush
     // before the watchdog reset. This must work from AP onboarding and from the
-    // normal STA config page. (lwIP timers are pumped by usb_net_task() in the
-    // dual-transport build; in AP mode usb_net is skipped, so pump them here.)
-    if (in_ap_mode) sys_check_timeouts();
-
+    // normal STA config page.
     if (reboot_pending && time_reached(reboot_at)) {
         watchdog_reboot(0, 0, 0);
         return;

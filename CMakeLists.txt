@@ -94,10 +94,6 @@ option(ENABLE_WEBCONFIG "Serve the config web page over a USB network interface"
 # REQUIRES ENABLE_WEBCONFIG (enforced below). Sets CYW43_LWIP=1 so the SDK's
 # cyw43_arch owns lwIP and wires it to the WiFi netif.
 option(ENABLE_WIFI_WOL "Serve the config page + send Wake-on-LAN over the onboard CYW43 Wi-Fi (STA mode)" ON)
-if (ENABLE_WIFI_WOL AND NOT ENABLE_WEBCONFIG)
-    message(STATUS "ENABLE_WIFI_WOL forced OFF: requires ENABLE_WEBCONFIG (the httpd handlers live in usb_net.cpp until the web_api factoring)")
-    set(ENABLE_WIFI_WOL OFF)
-endif ()
 if (ENABLE_WIFI_WOL)
     set(CYW43_LWIP_VALUE 1)
 else ()
@@ -169,6 +165,18 @@ add_executable(ds5-bridge
 set_source_files_properties(src/ram_mem.c PROPERTIES COMPILE_OPTIONS
         "-fno-builtin;-fno-tree-loop-distribute-patterns")
 
+# The web UI itself (config page + JSON API + captive portal, web_api.cpp) is
+# transport-agnostic: compiled whenever at least one transport (NCM or WiFi)
+# can serve it.
+if (ENABLE_WEBCONFIG OR ENABLE_WIFI_WOL)
+    target_sources(ds5-bridge PRIVATE src/web_api.cpp)
+    target_link_libraries(ds5-bridge
+            pico_unique_id
+            pico_lwip_nosys
+            pico_lwip_http
+    )
+endif ()
+
 if (ENABLE_WEBCONFIG)
     target_sources(ds5-bridge PRIVATE
             src/usb_net.cpp
@@ -180,11 +188,6 @@ if (ENABLE_WEBCONFIG)
             ${PICO_TINYUSB_PATH}/lib/networking
     )
     target_compile_definitions(ds5-bridge PRIVATE ENABLE_WEBCONFIG)
-    target_link_libraries(ds5-bridge
-            pico_unique_id
-            pico_lwip_nosys
-            pico_lwip_http
-    )
 endif ()
 
 if (ENABLE_WIFI_WOL)
