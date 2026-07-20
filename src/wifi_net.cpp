@@ -272,14 +272,29 @@ static void build_ap_ssid(void) {
              uid.id[PICO_UNIQUE_BOARD_ID_SIZE_BYTES - 1]);
 }
 
+// Setup-AP password. Deliberately NOT secret -- it's printed in the docs, the
+// config page and the UART log; WPA2 here is a doorman, not a vault. It keeps
+// drive-by devices and neighbors from auto-joining an open network (and
+// keeps the portal traffic encrypted); the API allowlist in AP mode remains
+// the real guard on what a joined client can do. Overridable at configure
+// time (CMake WIFI_SETUP_PSK); must be 8..63 chars (WPA2).
+#ifndef WIFI_AP_SETUP_PSK
+#define WIFI_AP_SETUP_PSK "dualsense"
+#endif
+static_assert(sizeof(WIFI_AP_SETUP_PSK) - 1 >= 8,
+              "WPA2 passphrase must be at least 8 characters");
+static_assert(sizeof(WIFI_AP_SETUP_PSK) - 1 <= 63,
+              "WPA2 passphrase must be at most 63 characters");
+
 static void wifi_ap_init(void) {
     in_ap_mode = true;
     build_ap_ssid();
 
-    // Open AP (no password): a captive-portal setup network is conventionally
-    // open so the user can join without yet another secret, and the only thing
-    // it carries is the local provisioning page (no WOL, no LAN access).
-    cyw43_arch_enable_ap_mode(ap_ssid, NULL, CYW43_AUTH_OPEN);
+    // WPA2 with the fixed, documented password above. (Upstream ships this AP
+    // open; we diverge -- see the password comment.) The captive-portal
+    // sign-in sheet still pops after joining: detection is HTTP-probe based,
+    // independent of the network's auth.
+    cyw43_arch_enable_ap_mode(ap_ssid, WIFI_AP_SETUP_PSK, CYW43_AUTH_WPA2_AES_PSK);
 
     // Give the AP netif a fixed address. Address it explicitly via
     // cyw43_state.netif[CYW43_ITF_AP] rather than netif_default: the SDK sets
@@ -314,8 +329,8 @@ static void wifi_ap_init(void) {
     // wifi_net_in_ap_mode() is true.
     httpd_init();
 
-    printf("[wifi] AP onboarding: join \"%s\" then browse to http://%u.%u.%u.%u/\n",
-           ap_ssid, AP_GW_A, AP_GW_B, AP_GW_C, AP_GW_D);
+    printf("[wifi] AP onboarding: join \"%s\" (password \"%s\") then browse to http://%u.%u.%u.%u/\n",
+           ap_ssid, WIFI_AP_SETUP_PSK, AP_GW_A, AP_GW_B, AP_GW_C, AP_GW_D);
 }
 
 //--------------------------------------------------------------------+

@@ -317,7 +317,8 @@ footer .kofi:hover{text-decoration:none;opacity:.9}
   reboots the adapter into its UF2 bootloader for a firmware update — no need
   to reach the BOOTSEL button. WiFi setup forgets the saved WiFi network and
   reboots into setup mode (teal chase light): join the
-  <b>DS5-Setup-XXXX</b> network from a phone to pick a new WiFi network.</div>
+  <b>DS5-Setup-XXXX</b> network (password <b>dualsense</b>) from a phone to
+  pick a new WiFi network.</div>
 
 <script>
 const $=id=>document.getElementById(id);
@@ -442,7 +443,7 @@ async function flashMode(){
 $('flashmode').onclick=flashMode;
 
 async function wifiReset(){
-  if(!confirm('Forget the saved WiFi network and re-enter setup mode?\n\nThe adapter reboots and broadcasts its own DS5-Setup-XXXX network (LED strip shows a teal chase). Join it from a phone to pick a new WiFi network. Controllers and all other settings are kept.\n\nOn firmware without WiFi support this does nothing.'))return;
+  if(!confirm('Forget the saved WiFi network and re-enter setup mode?\n\nThe adapter reboots and broadcasts its own DS5-Setup-XXXX network, password: dualsense (LED strip shows a teal chase). Join it from a phone to pick a new WiFi network. Controllers and all other settings are kept.\n\nOn firmware without WiFi support this does nothing.'))return;
   setStatus('resetting WiFi…','dirty');
   try{
     const r=await fetch('/api/wifi_reset',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:''});

@@ -201,8 +201,12 @@ if (ENABLE_WIFI_WOL)
     target_include_directories(ds5-bridge PRIVATE
             lib/portal
     )
+    # Setup-AP password (deliberately not secret -- a doorman against
+    # drive-by joins, not a vault; see wifi_net.cpp). 8..63 chars (WPA2).
+    set(WIFI_SETUP_PSK "dualsense" CACHE STRING "WPA2 password for the DS5-Setup-XXXX onboarding AP (8..63 chars)")
     target_compile_definitions(ds5-bridge PRIVATE
             ENABLE_WIFI_WOL
+            WIFI_AP_SETUP_PSK="${WIFI_SETUP_PSK}"
     )
     target_link_libraries(ds5-bridge
             pico_lwip_mdns   # <hostname>.local discovery on the home LAN
