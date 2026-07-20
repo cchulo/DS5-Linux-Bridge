@@ -18,6 +18,21 @@
 // plenty for rings/squares while keeping the render loop cheap.
 #define LED_STRIP_MAX_PIXELS 32
 
+// mDNS / network hostname (the "<name>.local" the dongle advertises). User-set
+// so two dongles on one LAN don't both claim ds5.local. Max 10 chars + NUL;
+// validated to a DNS label (lowercase a-z, 0-9, hyphen; no leading/trailing
+// hyphen) in config_valid(). See CONFIG_HOSTNAME_DEFAULT.
+#define CONFIG_HOSTNAME_LEN     11
+#define CONFIG_HOSTNAME_DEFAULT "ds5"
+
+// Home-WLAN credentials for the WiFi transport's STA join (ENABLE_WIFI_WOL).
+// Filled by the onboarding captive portal and persisted to flash. SSID is 32
+// octets max (802.11) + NUL; a WPA2 PSK passphrase is 8..63 chars + NUL.
+// Stored in every build so the flash layout is identical across transports
+// (only the WiFi build reads them).
+#define CONFIG_WIFI_SSID_LEN    33  // 32 chars + NUL
+#define CONFIG_WIFI_PSK_LEN     64  // 63 chars + NUL (WPA2 passphrase max)
+
 //--------------------------------------------------------------------+
 // Config_body layout is APPEND-ONLY. To stay compatible with configs
 // already written to flash by older firmware, obey these rules:
@@ -124,6 +139,32 @@ struct __attribute__((packed)) Config_body {
     // controller is connected and pairing mode is not active. All-zero means
     // "unset" (fresh/migrated config) and defaults to blue in config_valid().
     uint8_t idle_rgb[3];
+    // --- WiFi transport + Wake-on-LAN (v6; NCM->WiFi migration) ---
+    // NOTE: our layout diverges from upstream kungaa here (both forks appended
+    // different fields after the common ancestor) -- field ORDER below is ours
+    // alone; never copy upstream's offsets.
+    //
+    // Network hostname advertised over mDNS as "<hostname>.local" (and set as
+    // the netif hostname). Defaults to CONFIG_HOSTNAME_DEFAULT; user-editable
+    // so multiple dongles on one LAN don't collide on ds5.local. config_valid()
+    // sanitizes it to a valid DNS label and re-defaults if empty.
+    char hostname[CONFIG_HOSTNAME_LEN];
+    // Home-WLAN credentials (WiFi onboarding). wifi_provisioned: 0 = no creds
+    // -> AP + captive portal; 1 = creds set -> STA join. wifi_ssid is NOT
+    // necessarily a DNS label, so it is NUL-terminated and length-bounded but
+    // not otherwise sanitized; the PSK is stored verbatim. config_valid()
+    // forces termination and clears wifi_provisioned if the SSID is empty.
+    // NEVER emitted back to the web UI in cleartext (the portal only ever
+    // writes them).
+    uint8_t wifi_provisioned;            // bool: 0 = onboard via AP, 1 = STA creds set
+    char    wifi_ssid[CONFIG_WIFI_SSID_LEN];
+    char    wifi_psk[CONFIG_WIFI_PSK_LEN];
+    // Wake-on-LAN targets (ENABLE_WIFI_WOL builds). wol_target_mac is the NIC
+    // of the PC to wake; wol_target_mac2 an optional second device (e.g. a TV).
+    // all-zero == unset (skipped). A wake fires a magic packet to every
+    // configured (non-zero) target (wifi_wol_send_all()).
+    uint8_t wol_target_mac[6];
+    uint8_t wol_target_mac2[6];
 };
 
 struct __attribute__((packed)) Config {
@@ -159,6 +200,11 @@ bool config_set_bond_name(const uint8_t *addr, const char *name);
 
 // Clear the name slot for `addr` (e.g. when its bond is forgotten).
 void config_clear_bond_name(const uint8_t *addr);
+
+// Store home-WLAN credentials in the in-RAM config (wifi_provisioned follows
+// from a non-empty SSID). Empty ssid+psk clears provisioning. The caller
+// persists with config_save() when ready.
+void config_set_wifi_creds(const char *ssid, const char *psk);
 
 extern bool is_dse;
 

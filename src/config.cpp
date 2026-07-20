@@ -12,15 +12,17 @@
 #include "hardware/sync.h"
 #include "pico/cyw43_arch.h"
 #include "pico/flash.h" // flash_safe_execute(): park core1 during the flash op
+#include "pico/multicore.h" // lockout-victim probe: direct-write save in AP mode
 #include "pico/btstack_flash_bank.h" // PICO_FLASH_BANK_STORAGE_OFFSET (collision guard)
 #include "usb_net.h" // WEBCONFIG_SUBNET_COUNT (subnet-index bound, always defined)
 #include "utils.h"
 
 constexpr uint32_t CONFIG_MAGIC = 0x66ccff00;
 // Layout version. Only bump on a genuinely incompatible layout change (see the
-// append-only note in config.h); NOT a reset trigger. v5 added
+// append-only note in config.h); NOT a reset trigger. v6 appended the WiFi
+// transport tail (hostname, creds, WOL targets); v5 added
 // webconfig_custom_ip; v4 bond_names.
-constexpr uint16_t CONFIG_VERSION = 5;
+constexpr uint16_t CONFIG_VERSION = 6;
 // Config lives just BELOW BTstack's link-key bank, NOT in the last flash sector.
 // The RP2350 BOOTSEL/picotool UF2 loader erases the top of flash (the last
 // sector) on download -- even though the UF2 image ends far below it -- so a
@@ -84,7 +86,15 @@ static_assert(offsetof(Config_body, pairing_rgb) == 296);
 static_assert(offsetof(Config_body, disable_lightbar_override) == 299);
 static_assert(offsetof(Config_body, lightbar_filter_rgb) == 300);
 static_assert(offsetof(Config_body, idle_rgb) == 303);
-static_assert(sizeof(Config_body) <= 320); // keep well inside the 512 B store
+// WiFi transport tail (v6). OUR layout -- diverged from upstream kungaa's; see
+// the note in config.h.
+static_assert(offsetof(Config_body, hostname) == 306);
+static_assert(offsetof(Config_body, wifi_provisioned) == 317);
+static_assert(offsetof(Config_body, wifi_ssid) == 318);
+static_assert(offsetof(Config_body, wifi_psk) == 351);
+static_assert(offsetof(Config_body, wol_target_mac) == 415);
+static_assert(offsetof(Config_body, wol_target_mac2) == 421);
+static_assert(sizeof(Config_body) <= 448); // keep well inside the 512 B store
 
 // CRC over the first `len` bytes of the body. `len` is the stored size, so an
 // older/shorter blob still validates against the bytes it actually wrote.
@@ -94,6 +104,30 @@ static uint32_t calc_config_crc(const Config &con, size_t len) {
 
 const Config *flash_config() {
   return reinterpret_cast<const Config *>(XIP_BASE + CONFIG_FLASH_OFFSET);
+}
+
+// Sanitize `host` in place to a valid single DNS label (RFC 952/1123 subset):
+// lowercase a-z, 0-9 and hyphen; uppercase folded to lowercase; any other
+// character dropped; no leading/trailing hyphen; NUL-terminated within
+// CONFIG_HOSTNAME_LEN. If nothing valid remains, reset to CONFIG_HOSTNAME_DEFAULT.
+// Used for the user-set mDNS hostname so a fat-fingered entry can't produce an
+// illegal "<name>.local" or strand discovery.
+static void sanitize_hostname(char *host) {
+  char clean[CONFIG_HOSTNAME_LEN];
+  size_t out = 0;
+  for (size_t i = 0; host[i] != '\0' && i < CONFIG_HOSTNAME_LEN - 1; i++) {
+    char c = host[i];
+    if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a'); // fold to lowercase
+    const bool ok = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+                    (c == '-' && out > 0); // no leading hyphen
+    if (ok && out < CONFIG_HOSTNAME_LEN - 1) clean[out++] = c;
+  }
+  while (out > 0 && clean[out - 1] == '-') out--; // no trailing hyphen
+  clean[out] = '\0';
+  if (out == 0) strncpy(clean, CONFIG_HOSTNAME_DEFAULT, sizeof(clean) - 1);
+  clean[sizeof(clean) - 1] = '\0';
+  strncpy(host, clean, CONFIG_HOSTNAME_LEN - 1);
+  host[CONFIG_HOSTNAME_LEN - 1] = '\0';
 }
 
 void config_valid() {
@@ -211,6 +245,36 @@ void config_valid() {
   for (auto &b : body->bond_names) {
     b.name[CONFIG_BOND_NAME_LEN - 1] = '\0';
   }
+  // Force-terminate then sanitize the hostname to a valid DNS label, defaulting
+  // it when empty/invalid. Runs on every load + save so corrupt flash or a bad
+  // web entry can never advertise an illegal "<name>.local".
+  body->hostname[CONFIG_HOSTNAME_LEN - 1] = '\0';
+  sanitize_hostname(body->hostname);
+  // WiFi creds (onboarding). Force NUL-termination so corrupt flash can't
+  // yield an unbounded SSID/PSK string. wifi_provisioned only ever means
+  // "STA creds present"; an empty SSID can't be a usable join target, so clear
+  // the flag in that case -> the WiFi build falls back to the AP captive portal
+  // instead of attempting a doomed join. (The PSK may legitimately be empty for
+  // an open network, so it is not part of this gate.)
+  body->wifi_ssid[CONFIG_WIFI_SSID_LEN - 1] = '\0';
+  body->wifi_psk[CONFIG_WIFI_PSK_LEN - 1] = '\0';
+  if (body->wifi_provisioned > 1) body->wifi_provisioned = 0;
+  if (body->wifi_ssid[0] == '\0') body->wifi_provisioned = 0;
+  // wol_target_mac / wol_target_mac2 need no check: any 6 bytes are a valid
+  // MAC, and all-zero is the meaningful "unset" default.
+}
+
+void config_set_wifi_creds(const char *ssid, const char *psk) {
+  if (!ssid) ssid = "";
+  if (!psk) psk = "";
+  strncpy(config.body.wifi_ssid, ssid, CONFIG_WIFI_SSID_LEN - 1);
+  config.body.wifi_ssid[CONFIG_WIFI_SSID_LEN - 1] = '\0';
+  strncpy(config.body.wifi_psk, psk, CONFIG_WIFI_PSK_LEN - 1);
+  config.body.wifi_psk[CONFIG_WIFI_PSK_LEN - 1] = '\0';
+  // Provisioned only if there's actually an SSID to join. config_valid() (run by
+  // the save path) re-checks this, but set it here so the in-RAM view is
+  // immediately consistent for any code that reads it before the save.
+  config.body.wifi_provisioned = (config.body.wifi_ssid[0] != '\0') ? 1 : 0;
 }
 
 // Reset the in-RAM config to all defaults (does NOT touch flash). Most fields
@@ -320,13 +384,26 @@ bool config_save() {
   // report "saved" (RAM was updated) while flash kept the old bytes; the change
   // then vanished on the next boot. Retry a few times, nudging core1 awake with
   // __sev() before each attempt so its flash-safe IRQ handler can run.
+  //
+  // In WiFi AP onboarding mode core1 is never launched (BT/audio are skipped);
+  // flash_safe_execute() would then find no registered lockout victim and fail
+  // with PICO_ERROR_NOT_PERMITTED -> credentials never persisted and the device
+  // loops back to AP forever. With no core1 victim registered there is no second
+  // core touching XIP, so the erase/program is safe to run DIRECTLY (interrupts
+  // off, as the flash op already does).
   int rc = PICO_ERROR_TIMEOUT;
-  for (int attempt = 0; attempt < CONFIG_SAVE_RETRIES; attempt++) {
-    __sev(); // wake core1 out of __wfe() so it can honour the flash-safe lockout
-    rc = flash_safe_execute(config_save_flash_op, page, CONFIG_SAVE_TIMEOUT_MS);
-    if (rc == PICO_OK) break;
-    printf("[Config] config_save flash_safe_execute failed (attempt %d/%d): %d\n",
-           attempt + 1, CONFIG_SAVE_RETRIES, rc);
+  if (!multicore_lockout_victim_is_initialized(1)) {
+    // No core1 victim registered (AP onboarding): safe to write directly.
+    config_save_flash_op(page);
+    rc = PICO_OK;
+  } else {
+    for (int attempt = 0; attempt < CONFIG_SAVE_RETRIES; attempt++) {
+      __sev(); // wake core1 out of __wfe() so it can honour the flash-safe lockout
+      rc = flash_safe_execute(config_save_flash_op, page, CONFIG_SAVE_TIMEOUT_MS);
+      if (rc == PICO_OK) break;
+      printf("[Config] config_save flash_safe_execute failed (attempt %d/%d): %d\n",
+             attempt + 1, CONFIG_SAVE_RETRIES, rc);
+    }
   }
   if (rc != PICO_OK) {
     printf("[Config] config_save FAILED after %d attempts: %d (config NOT persisted)\n",

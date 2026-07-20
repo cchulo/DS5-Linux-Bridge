@@ -85,6 +85,24 @@ message(STATUS "DS5-Linux-Bridge build target -- WAVESHARE_RP2350B_PLUS_W_BUILD=
 
 # Onboard web config UI over a USB CDC-NCM network interface. Default ON.
 option(ENABLE_WEBCONFIG "Serve the config web page over a USB network interface" ON)
+
+# WiFi transport (STA mode on the onboard CYW43 -- the same chip BTstack
+# drives; the WiFi firmware blob is already in the image) + Wake-on-LAN +
+# first-boot captive-portal onboarding. Ported from kungaa/DS5-Linux-Bridge.
+# MIGRATION (NCM->WiFi): runs ALONGSIDE the NCM transport for bring-up; the
+# httpd content handlers still live in usb_net.cpp, so this currently
+# REQUIRES ENABLE_WEBCONFIG (enforced below). Sets CYW43_LWIP=1 so the SDK's
+# cyw43_arch owns lwIP and wires it to the WiFi netif.
+option(ENABLE_WIFI_WOL "Serve the config page + send Wake-on-LAN over the onboard CYW43 Wi-Fi (STA mode)" ON)
+if (ENABLE_WIFI_WOL AND NOT ENABLE_WEBCONFIG)
+    message(STATUS "ENABLE_WIFI_WOL forced OFF: requires ENABLE_WEBCONFIG (the httpd handlers live in usb_net.cpp until the web_api factoring)")
+    set(ENABLE_WIFI_WOL OFF)
+endif ()
+if (ENABLE_WIFI_WOL)
+    set(CYW43_LWIP_VALUE 1)
+else ()
+    set(CYW43_LWIP_VALUE 0)
+endif ()
 option(ENABLE_VERBOSE "Enable Log Verbose" OFF)
 if(ENABLE_VERBOSE)
     set(ENABLE_VERBOSE_VALUE 1)
@@ -166,6 +184,28 @@ if (ENABLE_WEBCONFIG)
             pico_unique_id
             pico_lwip_nosys
             pico_lwip_http
+    )
+endif ()
+
+if (ENABLE_WIFI_WOL)
+    target_sources(ds5-bridge PRIVATE
+            src/wifi_net.cpp
+            # Onboarding captive portal (AP mode): tiny DHCP + DNS servers so a
+            # phone gets a lease and every lookup resolves to the portal page.
+            # Vendored from upstream kungaa (originally pico-examples); the
+            # dhcpserver.h pool constants are re-homed to the 10.55.55.104/29
+            # AP plan. See lib/portal.
+            lib/portal/dhcpserver.c
+            lib/portal/dnsserver.c
+    )
+    target_include_directories(ds5-bridge PRIVATE
+            lib/portal
+    )
+    target_compile_definitions(ds5-bridge PRIVATE
+            ENABLE_WIFI_WOL
+    )
+    target_link_libraries(ds5-bridge
+            pico_lwip_mdns   # <hostname>.local discovery on the home LAN
     )
 endif ()
 
@@ -279,7 +319,10 @@ target_compile_definitions(ds5-bridge PRIVATE
         #   image .. | cfg(-4) | btstack bank(-3,-2) | bootrom-erased(-1)
         # One-time effect: bonds stored at the old location are lost once.
         PICO_FLASH_BANK_STORAGE_OFFSET=\(PICO_FLASH_SIZE_BYTES-3*FLASH_SECTOR_SIZE\)
-        CYW43_LWIP=0
+        # WiFi builds hand lwIP to the SDK's cyw43_arch (it creates/owns the
+        # WiFi netif and calls lwip_init); NCM-only builds keep lwIP manual
+        # (usb_net.cpp calls lwip_init itself).
+        CYW43_LWIP=${CYW43_LWIP_VALUE}
         # 0 (not 1): flash_safe_execute() must really park core1 while flash is
         # erased/programmed (config_save). With =1 the lockout is skipped and the
         # flash op races the audio core -> buzzing / crash when saving during

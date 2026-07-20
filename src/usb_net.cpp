@@ -46,6 +46,16 @@
 #include "config.h"
 #include "web_page.h"
 #include "weblog.h"
+#ifdef ENABLE_WIFI_WOL
+#include "wifi_net.h"
+#include "web_portal.h" // onboarding captive-portal page (served in AP mode)
+
+// Results of the wifi provision/reset POSTs, reported via the synthetic
+// /api/wifi_*_result routes. Set in the POST handlers (below fs_open_custom,
+// which reads them), so declare here.
+static bool provision_ok;
+static bool wifi_reset_ok;
+#endif
 
 //--------------------------------------------------------------------+
 // TinyUSB network glue (pattern from examples/device/net_lwip_webserver)
@@ -453,6 +463,40 @@ static int json_slots(char *out, size_t cap) {
 }
 
 extern "C" int fs_open_custom(struct fs_file *file, const char *name) {
+#ifdef ENABLE_WIFI_WOL
+    // Onboarding mode: serve the captive portal for essentially every GET.
+    if (wifi_net_in_ap_mode()) {
+        // In AP mode the network is OPEN and BT is never initialized, so only
+        // the onboarding routes may reach the shared handlers. Everything else
+        // under /api/ (config, bonds -- forgetall really erases the TLV,
+        // status, slots, led) is 404'd so a nearby actor who joins
+        // DS5-Setup-XXXX can't rewrite config or wipe bonds. The portal page
+        // itself only ever calls wifi_scan + wifi_provision(_result).
+        const bool is_portal_api =
+            (strcmp(name, "/api/wifi_scan") == 0) ||
+            (strcmp(name, "/api/wifi_provision") == 0) ||
+            (strcmp(name, "/api/wifi_provision_result") == 0);
+        const bool other_api = (strncmp(name, "/api/", 5) == 0);
+        if (other_api && !is_portal_api) {
+            // A non-onboarding API GET in AP mode: reject.
+            static const char nf[] = "not found";
+            return make_file(file, "404 Not Found", "text/plain", nf, sizeof(nf) - 1);
+        }
+        if (!is_portal_api) {
+            // Serve the portal page itself (200) for the root, the OS captive-probe
+            // URLs (Windows /connecttest.txt + /index.shtml; Apple
+            // /hotspot-detect.html; Android /generate_204; ...), AND any other GET.
+            // We deliberately do NOT 302-redirect: redirecting probe URLs on the
+            // SAME host makes the captive mini-browser re-request in a tight loop
+            // and never render. Returning the page body directly for every path
+            // breaks that loop and makes the "Sign in" sheet show the form
+            // immediately. (make_file copies the ~4.6 KB page per request --
+            // fine in AP mode, where BT/audio never start and the heap is free.)
+            return make_file(file, "200 OK", "text/html; charset=utf-8",
+                             PORTAL_PAGE, (int) (sizeof(PORTAL_PAGE) - 1));
+        }
+    }
+#endif
     if (strcmp(name, "/") == 0 || strcmp(name, "/index.html") == 0) {
         // Serve the page straight from flash (headers included) -- zero heap.
         memset(file, 0, sizeof(*file));
@@ -489,6 +533,32 @@ extern "C" int fs_open_custom(struct fs_file *file, const char *name) {
         const int len = weblog_snapshot(logbuf, sizeof(logbuf));
         return make_file(file, "200 OK", "text/plain; charset=utf-8", logbuf, len);
     }
+#ifdef ENABLE_WIFI_WOL
+    if (strcmp(name, "/api/wifi_scan") == 0) {
+        // A scan is kicked off on first hit; later hits are the portal's
+        // rate-limited refresh (see wifi_scan_start guards). Only live in AP
+        // mode (wifi_scan_start no-ops otherwise; the list is then empty).
+        wifi_scan_start();
+        static char scanbuf[1024];
+        const int len = wifi_scan_json(scanbuf, sizeof(scanbuf));
+        return make_file(file, "200 OK", "application/json", scanbuf, len);
+    }
+    if (strcmp(name, "/api/wifi_provision_result") == 0) {
+        // Synthetic reply for the provision POST (see httpd_post_finished).
+        // Reports whether the creds were accepted; the device reboots into STA
+        // shortly after.
+        const int len = snprintf(body, sizeof(body), "{\"ok\":%s}",
+                                 provision_ok ? "true" : "false");
+        return make_file(file, "200 OK", "application/json", body, len);
+    }
+    if (strcmp(name, "/api/wifi_reset_result") == 0) {
+        // Synthetic reply for POST /api/wifi_reset. If ok, the device has
+        // cleared its WiFi credentials and will reboot into AP onboarding.
+        const int len = snprintf(body, sizeof(body), "{\"ok\":%s}",
+                                 wifi_reset_ok ? "true" : "false");
+        return make_file(file, "200 OK", "application/json", body, len);
+    }
+#endif
     // POST /api/config redirects here when config_save() failed to reach flash.
     // Returning a non-2xx status makes the page's `r.ok` check false so it shows
     // an error instead of "Saved ✓" for a change that never persisted.
@@ -551,7 +621,8 @@ extern "C" int fs_read_custom(struct fs_file *file, char *buffer, int count) {
 static char post_buf[POST_BUFSIZE];
 static u16_t post_pos;
 static void *post_conn;
-enum post_target_t { POST_CONFIG, POST_BONDS, POST_SLOTS, POST_LED, POST_REBOOT };
+enum post_target_t { POST_CONFIG, POST_BONDS, POST_SLOTS, POST_LED, POST_REBOOT,
+                     POST_WIFI_PROVISION, POST_WIFI_RESET };
 static post_target_t post_target; // which endpoint the in-flight POST targets
 static bool last_save_ok = true; // result of the most recent config_save()
 static bool last_action_ok = true; // result of the most recent slots/led action
@@ -902,6 +973,42 @@ static void apply_reboot_post(char *body) {
            last_action_ok ? "ARMED (BOOTSEL in 500ms)" : "REJECTED");
 }
 
+// POST /api/wifi_provision -- ssid=...&psk=... from the onboarding portal.
+// Saves the home-WLAN credentials and schedules a reboot into STA mode
+// (wifi_provision_apply owns the persist + deferred reset). The JSON reply is
+// sent before the reboot fires so the phone sees success.
+#ifdef ENABLE_WIFI_WOL
+static void apply_wifi_provision_post(char *body) {
+    char ssid[CONFIG_WIFI_SSID_LEN] = "";
+    char psk[CONFIG_WIFI_PSK_LEN] = "";
+    bool too_long = false;
+    for (char *tok = strtok(body, "&"); tok; tok = strtok(nullptr, "&")) {
+        char *eq = strchr(tok, '=');
+        if (!eq) continue;
+        *eq++ = 0;
+        if (strcmp(tok, "ssid") == 0) {
+            url_decode(eq);
+            if (strlen(eq) >= sizeof(ssid)) too_long = true;
+            else strcpy(ssid, eq);
+        } else if (strcmp(tok, "psk") == 0) {
+            url_decode(eq);
+            if (strlen(eq) >= sizeof(psk)) too_long = true;
+            else strcpy(psk, eq);
+        }
+    }
+    provision_ok = !too_long && wifi_provision_apply(ssid, psk);
+    printf("[NET] wifi provision %s\n", provision_ok ? "accepted" : "rejected");
+}
+
+// POST /api/wifi_reset -- from the normal config page after the device is on
+// the home WLAN. Clears stored WiFi credentials and schedules a reboot; the
+// next boot is unprovisioned, so it starts the AP captive portal.
+static void apply_wifi_reset_post(void) {
+    wifi_reset_ok = wifi_reset_provisioning_apply();
+    printf("[NET] wifi reset %s\n", wifi_reset_ok ? "accepted" : "rejected");
+}
+#endif
+
 extern "C" err_t httpd_post_begin(void *connection, const char *uri, const char *http_request,
                                   u16_t http_request_len, int content_len, char *response_uri,
                                   u16_t response_uri_len, u8_t *post_auto_wnd) {
@@ -918,7 +1025,21 @@ extern "C" err_t httpd_post_begin(void *connection, const char *uri, const char 
     else if (strcmp(uri, "/api/led") == 0) target = POST_LED;
 #endif
     else if (strcmp(uri, "/api/reboot") == 0) target = POST_REBOOT;
+#ifdef ENABLE_WIFI_WOL
+    else if (strcmp(uri, "/api/wifi_provision") == 0) target = POST_WIFI_PROVISION;
+    else if (strcmp(uri, "/api/wifi_reset") == 0) target = POST_WIFI_RESET;
+#endif
     else return ERR_VAL;
+#ifdef ENABLE_WIFI_WOL
+    // In AP onboarding mode reject every POST except the provision flow. The
+    // open AP + uninitialized BT means POST /api/bonds action=forgetall
+    // (gap_delete_all_link_keys erases the TLV even with BT down) or
+    // POST /api/config (rewrites+persists settings) must not be reachable.
+    if (wifi_net_in_ap_mode() &&
+        target != POST_WIFI_PROVISION && target != POST_WIFI_RESET) {
+        return ERR_VAL;
+    }
+#endif
     if (content_len >= POST_BUFSIZE) return ERR_VAL;
     if (post_conn) return ERR_USE; // one POST at a time
     post_conn = connection;
@@ -965,6 +1086,19 @@ extern "C" void httpd_post_finished(void *connection, char *response_uri, u16_t 
             snprintf(response_uri, response_uri_len,
                      last_action_ok ? "/api/reboot-ok" : "/api/action-failed");
             break;
+#ifdef ENABLE_WIFI_WOL
+        case POST_WIFI_PROVISION:
+            apply_wifi_provision_post(post_buf);
+            // The reply is served from the synthetic result route, which reports
+            // provision_ok set just above. (The reboot is deferred ~1.2s by
+            // wifi_net.cpp so this response reaches the phone first.)
+            snprintf(response_uri, response_uri_len, "/api/wifi_provision_result");
+            break;
+        case POST_WIFI_RESET:
+            apply_wifi_reset_post();
+            snprintf(response_uri, response_uri_len, "/api/wifi_reset_result");
+            break;
+#endif
         case POST_CONFIG:
         default:
             apply_post(post_buf);
@@ -989,7 +1123,12 @@ void usb_net_init() {
     const Config_body &cfg = get_config();
     build_subnet(cfg.webconfig_subnet, cfg.webconfig_custom_ip);
 
+#ifndef ENABLE_WIFI_WOL
+    // WiFi builds run CYW43_LWIP=1: cyw43_arch_init() already ran lwip_init()
+    // (and a second init would corrupt the running stack). NCM-only builds
+    // still own the stack and must init it here.
     lwip_init();
+#endif
 
     netif_data.hwaddr_len = 6;
     memcpy(netif_data.hwaddr, tud_network_mac_address, 6);

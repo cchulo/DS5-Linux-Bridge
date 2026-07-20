@@ -20,6 +20,7 @@
 #include "config.h"
 #include "dse.h"
 #include "usb_net.h"
+#include "wifi_net.h"
 #include "tier.h"
 
 #if ENABLE_BATT_LED
@@ -519,15 +520,26 @@ int main() {
     while (true) tight_loop_contents();
   }
 
-  // Load persisted config from flash BEFORE usb_net_init(): the web server
-  // picks its subnet from get_config().webconfig_subnet, so the saved value
-  // must be in place first (otherwise it always reads the default).
+  // Load persisted config from flash BEFORE usb_net_init()/wifi_net_init():
+  // the web server picks its subnet from get_config().webconfig_subnet and the
+  // WiFi transport reads the stored credentials (STA vs AP onboarding) + mDNS
+  // hostname, so the saved values must be in place first.
   config_load();
 
+  // Bring up the WiFi transport (no-op with ENABLE_WIFI_WOL off). Decides STA
+  // (provisioned: join the home WLAN, async) vs AP + captive portal
+  // (unprovisioned onboarding). In WiFi builds the SDK's cyw43_arch_init()
+  // above already brought lwIP up (CYW43_LWIP=1).
+  wifi_net_init();
+
   // Bring up the onboard config web server (USB CDC-NCM + lwIP). No-op when
-  // ENABLE_WEBCONFIG is off. lwIP is ours alone here (CYW43_LWIP=0).
+  // ENABLE_WEBCONFIG is off. Skipped during AP onboarding: that mode is a
+  // dedicated setup network (portal + httpd started by wifi_net_init), and
+  // the NCM netif must not compete for netif_default with the AP netif.
   // Diagnostics print to UART0 (GP0 TX, 115200 8N1), not USB.
-  usb_net_init();
+  if (!wifi_net_in_ap_mode()) {
+    usb_net_init();
+  }
 
   // Power-On Self Test (POST) LED pattern: 3 rapid flashes to confirm
   // successful CPU overclocking and CYW43 Bluetooth module initialization.
@@ -593,13 +605,26 @@ int main() {
   critical_section_init(&report_cs);
   wake_init();
 
-  watchdog_update();
-  bt_init();
-  bt_register_data_callback(on_bt_data);
+  // WiFi onboarding (AP + captive portal) is a dedicated setup mode: no
+  // controller, no audio. Crucially, BT classic page-scan/inquiry contends
+  // with the SoftAP on the single shared CYW43 radio -- upstream observed the
+  // AP beaconing but never admitting a station with BT up (stas=0, client
+  // loops DHCP forever). So in AP mode we skip BT + audio entirely, handing
+  // the radio to the AP (and freeing ~110 KB of heap; core1 is never
+  // launched, which is why config_save() has the direct-write path). Normal
+  // STA operation brings BT/audio up as usual.
+  const bool ap_onboarding = wifi_net_in_ap_mode();
+  if (!ap_onboarding) {
+    watchdog_update();
+    bt_init();
+    bt_register_data_callback(on_bt_data);
 
-  watchdog_update();
-  audio_init();
-  state_init();
+    watchdog_update();
+    audio_init();
+    state_init();
+  } else {
+    printf("[BOOT] AP onboarding mode: skipping BT + audio (radio handed to SoftAP)\n");
+  }
 
 #ifdef ENABLE_WAKE_HID
   // Enumerate immediately as the FULL variant: every gamepad interface (plus
@@ -612,6 +637,23 @@ int main() {
 #endif
 
   watchdog_enable(1000, true);
+
+  // Onboarding loop: a stripped main loop with BT/audio/HID skipped (they were
+  // never initialised in AP mode). Pump only the radio/lwIP (cyw43_arch_poll +
+  // wifi_net_task drive the SoftAP RX, DHCP/DNS servers, scan, captive portal)
+  // plus tud_task to keep USB alive, and feed the watchdog. The device leaves
+  // this loop by rebooting into STA mode once the user provisions
+  // (wifi_net_task fires the deferred watchdog_reboot). The LED strip and the
+  // NCM web server are deliberately not serviced here -- setup mode only.
+  if (ap_onboarding) {
+    while (1) {
+      watchdog_update();
+      cyw43_arch_poll();
+      tud_task();
+      wifi_net_task();
+      sleep_us(250);
+    }
+  }
 
   while (1) {
     watchdog_update();
@@ -628,6 +670,9 @@ int main() {
     // Service lwIP timers for the onboard config web server (no-op when
     // ENABLE_WEBCONFIG is off). Cheap; not in the audio hot path.
     usb_net_task();
+    // WiFi STA link supervision + mDNS registration + deferred reboots
+    // (no-op with ENABLE_WIFI_WOL off). RX is pumped by cyw43_arch_poll().
+    wifi_net_task();
     audio_loop();
     interrupt_loop();
     // DSE Edge profile snapshot prefetch/unlock state machine.
