@@ -624,6 +624,15 @@ int main() {
     state_init();
   } else {
     printf("[BOOT] AP onboarding mode: skipping BT + audio (radio handed to SoftAP)\n");
+#ifdef ENABLE_LED_STRIP
+    // Setup-mode indicator: dim teal, held for the whole onboarding session
+    // (the AP loop runs no strip animation). Doubles as the eraser for a
+    // stale panic-red frame latched by the watchdog-crash blink -- normally
+    // the main loop's first rendered frame clears it, but the AP loop never
+    // renders, so without this a single past crash leaves red lit forever
+    // even though setup mode is healthy.
+    ledstrip_hold_solid(0, 48, 64);
+#endif
   }
 
 #ifdef ENABLE_WAKE_HID
