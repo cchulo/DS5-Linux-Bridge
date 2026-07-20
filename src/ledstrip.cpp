@@ -238,7 +238,11 @@ void ledstrip_setup_chase_tick() {
     // this must not read bt_get_status()/bt_pairing_mode_active(). Teal is
     // reserved for setup mode (no other status uses it), fixed rather than
     // configurable so it is recognizable even on a fresh/factory-reset config.
-    constexpr uint8_t SETUP_TEAL[3] = {0, 96, 128};
+    // Full-scale channels: every other status color drives at least one
+    // channel at 255, and the shared gamma curve crushes mid-range values --
+    // the earlier {0,96,128} gamma'd down to ~1/5 the brightness of the
+    // red/blue indicators and read as faint. Same 3:4 green:blue hue.
+    constexpr uint8_t SETUP_TEAL[3] = {0, 191, 255};
 
     // Single teal pixel walking the chain — same dwell as the debug chase, a
     // deliberately different motion from every status animation so setup mode
