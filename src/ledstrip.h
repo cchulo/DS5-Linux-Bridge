@@ -81,4 +81,12 @@ void ledstrip_hold_solid(uint8_t r, uint8_t g, uint8_t b);
 // boot renders).
 void ledstrip_panic_red();
 
+// WiFi-onboarding indicator: whole strip breathes teal (fixed color — teal is
+// reserved for setup mode). Call every iteration of the AP onboarding loop
+// instead of ledstrip_tick(): unlike the normal tick it reads NO BT state,
+// which is never initialised in that mode. Starts from dark like the idle
+// breathe; the first frame also clears a latched panic-red from a prior
+// crash blink.
+void ledstrip_setup_breathe_tick();
+
 #endif // DS5_BRIDGE_LEDSTRIP_H

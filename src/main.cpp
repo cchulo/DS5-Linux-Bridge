@@ -624,15 +624,6 @@ int main() {
     state_init();
   } else {
     printf("[BOOT] AP onboarding mode: skipping BT + audio (radio handed to SoftAP)\n");
-#ifdef ENABLE_LED_STRIP
-    // Setup-mode indicator: dim teal, held for the whole onboarding session
-    // (the AP loop runs no strip animation). Doubles as the eraser for a
-    // stale panic-red frame latched by the watchdog-crash blink -- normally
-    // the main loop's first rendered frame clears it, but the AP loop never
-    // renders, so without this a single past crash leaves red lit forever
-    // even though setup mode is healthy.
-    ledstrip_hold_solid(0, 48, 64);
-#endif
   }
 
 #ifdef ENABLE_WAKE_HID
@@ -673,6 +664,14 @@ int main() {
       cyw43_arch_poll();
       tud_task();
       wifi_net_task();
+#ifdef ENABLE_LED_STRIP
+      // Setup-mode indicator: whole strip breathes teal (reserved for
+      // onboarding). Not ledstrip_tick() -- that reads BT state, which was
+      // never initialised in this mode. Its first frame also clears a
+      // panic-red frame latched by a prior crash blink, which the
+      // render-nothing AP loop would otherwise leave lit forever.
+      ledstrip_setup_breathe_tick();
+#endif
       sleep_us(250);
     }
   }
