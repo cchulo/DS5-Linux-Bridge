@@ -665,12 +665,12 @@ int main() {
       tud_task();
       wifi_net_task();
 #ifdef ENABLE_LED_STRIP
-      // Setup-mode indicator: whole strip breathes teal (reserved for
-      // onboarding). Not ledstrip_tick() -- that reads BT state, which was
-      // never initialised in this mode. Its first frame also clears a
-      // panic-red frame latched by a prior crash blink, which the
-      // render-nothing AP loop would otherwise leave lit forever.
-      ledstrip_setup_breathe_tick();
+      // Setup-mode indicator: teal chase (reserved for onboarding). Not
+      // ledstrip_tick() -- that reads BT state, which was never initialised
+      // in this mode. Its first frame also clears a panic-red frame latched
+      // by a prior crash blink, which the render-nothing AP loop would
+      // otherwise leave lit forever.
+      ledstrip_setup_chase_tick();
 #endif
       sleep_us(250);
     }

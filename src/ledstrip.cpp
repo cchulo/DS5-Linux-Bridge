@@ -226,7 +226,7 @@ void ledstrip_hold_solid(uint8_t r, uint8_t g, uint8_t b) {
 
 void ledstrip_panic_red() { ledstrip_hold_solid(255, 0, 0); }
 
-void ledstrip_setup_breathe_tick() {
+void ledstrip_setup_chase_tick() {
     if (!led_ready) return;
     const uint64_t now = time_us_64();
     if (now < next_frame_us) return;
@@ -240,28 +240,19 @@ void ledstrip_setup_breathe_tick() {
     // configurable so it is recognizable even on a fresh/factory-reset config.
     constexpr uint8_t SETUP_TEAL[3] = {0, 96, 128};
 
-    // Same raised-cosine cadence as the idle breathe, phase-anchored to the
-    // first frame so it fades in from dark (also what clears a latched
-    // panic-red frame from a prior crash blink).
-    static uint32_t epoch_ms = 0;
-    static bool started = false;
-    if (!started) { epoch_ms = ms; started = true; }
-    constexpr float TWO_PI = 6.2831853f;
-    const float lvl =
-        0.5f - 0.5f * cosf((float) ((ms - epoch_ms) % BREATHE_MS) *
-                           (TWO_PI / (float) BREATHE_MS));
-
+    // Single teal pixel walking the chain — same dwell as the debug chase, a
+    // deliberately different motion from every status animation so setup mode
+    // can't be mistaken for the idle breathe.
     const int count = led_count();
-    const uint8_t rgb[3] = {(uint8_t) ((float) SETUP_TEAL[0] * lvl + 0.5f),
-                            (uint8_t) ((float) SETUP_TEAL[1] * lvl + 0.5f),
-                            (uint8_t) ((float) SETUP_TEAL[2] * lvl + 0.5f)};
+    const int lit = (int) ((ms / DEBUG_CHASE_MS) % count);
     // Push the full MAX like ledstrip_tick(): pixels past led_count stay
-    // dark, and a stale held frame is fully overwritten.
+    // dark, and a stale held frame (e.g. latched panic red from a prior
+    // crash blink) is fully overwritten from the first frame.
     for (int i = 0; i < MAX_PIXELS; i++) {
-        const bool lit = i < count;
-        const uint32_t grb = ((uint32_t) shape(lit ? rgb[1] : 0) << 16) |
-                             ((uint32_t) shape(lit ? rgb[0] : 0) << 8) |
-                             (uint32_t) shape(lit ? rgb[2] : 0);
+        const bool on = i == lit;
+        const uint32_t grb = ((uint32_t) shape(on ? SETUP_TEAL[1] : 0) << 16) |
+                             ((uint32_t) shape(on ? SETUP_TEAL[0] : 0) << 8) |
+                             (uint32_t) shape(on ? SETUP_TEAL[2] : 0);
         pio_sm_put_blocking(led_pio, led_sm, grb << 8u);
     }
 }

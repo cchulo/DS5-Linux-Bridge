@@ -309,12 +309,15 @@ footer .kofi:hover{text-decoration:none;opacity:.9}
   <button id="save">Save</button>
   <button id="factoryreset" class="fg">Factory reset</button>
   <button id="flashmode" style="background:#3a3a3a">Flash mode</button>
+  <button id="wifireset" style="background:#3a3a3a">WiFi setup</button>
   <span id="status"></span>
 </div>
 <div class="hint">Factory reset restores all settings to defaults. Paired
   controllers are kept (use <b>Forget all</b> to remove those). Flash mode
   reboots the adapter into its UF2 bootloader for a firmware update — no need
-  to reach the BOOTSEL button.</div>
+  to reach the BOOTSEL button. WiFi setup forgets the saved WiFi network and
+  reboots into setup mode (teal chase light): join the
+  <b>DS5-Setup-XXXX</b> network from a phone to pick a new WiFi network.</div>
 
 <script>
 const $=id=>document.getElementById(id);
@@ -437,6 +440,19 @@ async function flashMode(){
   }catch(e){setStatus('flash mode request failed','err')}
 }
 $('flashmode').onclick=flashMode;
+
+async function wifiReset(){
+  if(!confirm('Forget the saved WiFi network and re-enter setup mode?\n\nThe adapter reboots and broadcasts its own DS5-Setup-XXXX network (LED strip shows a teal chase). Join it from a phone to pick a new WiFi network. Controllers and all other settings are kept.\n\nOn firmware without WiFi support this does nothing.'))return;
+  setStatus('resetting WiFi…','dirty');
+  try{
+    const r=await fetch('/api/wifi_reset',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:''});
+    if(!r.ok)throw 0;
+    const d=await r.json();
+    if(d.ok)setStatus('WiFi cleared ✓ — rebooting into setup mode','ok');
+    else setStatus('WiFi reset failed — not written to flash, try again','err');
+  }catch(e){setStatus('WiFi reset unavailable (no WiFi firmware?)','err')}
+}
+$('wifireset').onclick=wifiReset;
 
 // ----- Paired controllers -----
 function fmtAddr(h){return h.match(/.{2}/g).join(':')}
