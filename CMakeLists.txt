@@ -368,45 +368,35 @@ endif()
 # label here -- a cached "-DVERSION=ps-create-combo" from a long-dead branch
 # haunted every local pico2_w build until 2026-07-19, which is exactly the
 # confusion the auto stamp exists to prevent.
-set(VERSION "" CACHE STRING "Program version string (empty = auto: build timestamp + git sha)")
-# Filename-safe minute stamp, always computed: also names the stamped UF2 copy
-# below. Configure-time, and docker/build.sh reconfigures on every invocation,
-# so each build.sh run gets a fresh stamp (a bare `cmake --build` keeps the
-# last configure's stamp).
-string(TIMESTAMP DS5_BUILD_STAMP "%Y-%m-%d %H:%M UTC" UTC)
+# Semver base for this fork. Bump by hand on meaningful milestones.
+set(DS5_BASE_VERSION "0.1.0")
+# Auto version: "<semver>-<build minute UTC>", e.g. 0.1.0-20260720-0142.
+# Minute-sensitive so a flashed image is never ambiguous; the stamped UF2
+# copy below carries the same string in its filename. Configure-time, and
+# docker/build.sh reconfigures on every invocation, so each build.sh run
+# stamps fresh (a bare `cmake --build` keeps the last configure's stamp).
+set(VERSION "" CACHE STRING "Program version string (empty = auto: <semver>-<build minute>)")
 string(TIMESTAMP DS5_FILE_STAMP "%Y%m%d-%H%M" UTC)
 if (VERSION STREQUAL "" OR VERSION STREQUAL "dev")
-    execute_process(
-            COMMAND git -c safe.directory=* -C ${CMAKE_CURRENT_SOURCE_DIR} rev-parse --short HEAD
-            OUTPUT_VARIABLE DS5_GIT_SHA OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
-    execute_process(
-            COMMAND git -c safe.directory=* -C ${CMAKE_CURRENT_SOURCE_DIR} status --porcelain --untracked-files=no
-            OUTPUT_VARIABLE DS5_GIT_DIRTY ERROR_QUIET)
-    if (DS5_GIT_SHA STREQUAL "")
-        set(DS5_VERSION "${DS5_BUILD_STAMP}") # no git available: stamp only
-    elseif (NOT DS5_GIT_DIRTY STREQUAL "")
-        set(DS5_VERSION "${DS5_BUILD_STAMP} (${DS5_GIT_SHA}+)")
-    else ()
-        set(DS5_VERSION "${DS5_BUILD_STAMP} (${DS5_GIT_SHA})")
-    endif ()
+    set(DS5_VERSION "${DS5_BASE_VERSION}-${DS5_FILE_STAMP}")
 else ()
-    set(DS5_VERSION "${VERSION}")
+    set(DS5_VERSION "${VERSION}") # CI release tag / explicit override
 endif ()
 message(STATUS "DS5-Linux-Bridge version string: ${DS5_VERSION}")
 
 pico_set_program_name(ds5-bridge "ds5-bridge")
 pico_set_program_version(ds5-bridge "${DS5_VERSION}")
 
-# Stamped UF2 copy: ds5-bridge-<yyyymmdd-hhmm>.uf2 next to the canonical
-# ds5-bridge.uf2 (which CI and docs reference -- keep it). The minute stamp
-# matches the version string compiled into the image, so the file you flashed
-# and the version the web UI reports can always be paired up. Prior stamped
+# Stamped UF2 copy: ds5-bridge-<version>.uf2 next to the canonical
+# ds5-bridge.uf2 (which CI and docs reference -- keep it). The filename
+# carries the exact version string compiled into the image, so the file you
+# flashed and the version the web UI reports pair up by name. Prior stamped
 # copies are removed first so the directory holds exactly one. Added AFTER
 # pico_add_extra_outputs so the UF2 exists when these POST_BUILD steps run.
 add_custom_command(TARGET ds5-bridge POST_BUILD
-        COMMAND sh -c "rm -f ds5-bridge-*.uf2"
-        COMMAND ${CMAKE_COMMAND} -E copy ds5-bridge.uf2 ds5-bridge-${DS5_FILE_STAMP}.uf2
-        COMMENT "Stamped UF2: ds5-bridge-${DS5_FILE_STAMP}.uf2"
+        COMMAND sh -c "rm -f ds5-bridge-[0-9]*.uf2"
+        COMMAND ${CMAKE_COMMAND} -E copy ds5-bridge.uf2 ds5-bridge-${DS5_VERSION}.uf2
+        COMMENT "Stamped UF2: ds5-bridge-${DS5_VERSION}.uf2"
         VERBATIM)
 
 # Diagnostics go over UART0 only (GP0 TX, 115200 8N1). No USB stdio: USB-CDC

@@ -38,7 +38,7 @@ docker run --rm -v "${REPO_DIR}:/work" -w /work "${IMAGE}" bash -c "
     cmake -S . -B '${BUILD_DIR}' -G Ninja -DCMAKE_BUILD_TYPE=Release ${CMAKE_FLAGS} $*
     cmake --build '${BUILD_DIR}'
 "
-STAMPED="$(ls "${REPO_DIR}/${BUILD_DIR}"/ds5-bridge-2*.uf2 2>/dev/null | head -1 || true)"
+STAMPED="$(ls "${REPO_DIR}/${BUILD_DIR}"/ds5-bridge-[0-9]*.uf2 2>/dev/null | head -1 || true)"
 echo ">> done: ${BUILD_DIR}/ds5-bridge.uf2"
 if [ -n "${STAMPED}" ]; then
     echo ">> stamped copy: ${BUILD_DIR}/$(basename "${STAMPED}")  (same file; name = build minute, matches the version shown in the web UI)"
