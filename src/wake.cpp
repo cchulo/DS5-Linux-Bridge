@@ -73,13 +73,53 @@ static void enter_state(wake_state_t s) {
     state_entered_us = time_us_64();
 }
 
+// Wake-on-LAN companion send (ENABLE_WIFI_WOL). Weak no-op default; the WiFi
+// transport provides the strong override (wifi_net.cpp). wake.cpp owns the
+// decision of WHEN to wake; the transport owns HOW to emit the packet.
+extern "C" __attribute__((weak)) bool wake_emit_wol(void) { return false; }
+
+// Rate-limit WOL to once per suspend spell, with a hard time floor surviving
+// the connect/disconnect churn during a single wake. We CANNOT distinguish S3
+// from S4/S5 over USB on this hardware (the suspend callback fires for all,
+// the device may or may not also unmount, with no signal telling them apart).
+// So on every warranted wake-while-suspended we fire BOTH the USB
+// remote-wakeup (wakes S3) AND a WOL packet (wakes S4/S5 via the NIC). A
+// stray WOL during S3 is harmless.
+static volatile bool     wol_fired_this_spell = false;
+static volatile uint64_t last_wol_us = 0;
+static constexpr uint64_t WAKE_WOL_MIN_INTERVAL_US = 10ULL * 1000000ULL; // 10 s
+
+static void maybe_emit_wol(const char *reason) {
+    (void) reason;
+    // CRITICAL: only emit WOL when the host is actually suspended. Unlike the
+    // USB tud_remote_wakeup() below -- which is a harmless no-op when the bus
+    // is awake, so request_host_wake() calls it speculatively even from the
+    // button-event path while the host is up -- a WOL packet is NOT a no-op:
+    // it broadcasts onto the LAN. Without this gate, every controller button
+    // press during normal gameplay (host awake) would fire a magic packet
+    // (upstream observed exactly that).
+    if (!host_suspended) return;
+    const uint64_t now = time_us_64();
+    if (wol_fired_this_spell) return;
+    if (last_wol_us != 0 && (now - last_wol_us) < WAKE_WOL_MIN_INTERVAL_US) return;
+    if (wake_emit_wol()) {
+        wol_fired_this_spell = true;
+        last_wol_us = now;
+        WAKE_DBG("%s -> WOL sent", reason);
+    }
+}
+
 // Issue a USB remote-wakeup to the host and, on success, advance the wake FSM
 // to WAKE_REQUESTED so wake_task() drives the follow-up keystroke sequence.
 // Shared by the button-event path (wake_on_bt_input) and the connect path
 // (wake_on_bt_connect). Callers are responsible for the gating checks
 // (armable state, !variant-swap, etc.) before calling.
+//
+// Also fires a Wake-on-LAN packet first (suspend-gated, once per suspend
+// spell -- see maybe_emit_wol): USB remote-wakeup covers S3, WOL covers S4/S5.
 static void request_host_wake(const char *reason) {
     (void)reason;
+    maybe_emit_wol(reason);
     bool ok = tud_remote_wakeup();
 
     // Linux quirk: Sometimes Linux fails to set the REMOTE_WAKEUP feature
@@ -157,6 +197,7 @@ extern "C" void tud_suspend_cb(bool remote_wakeup_en) {
     WAKE_DBG("tud_suspend_cb remote_wakeup_en=%d prev_state=%s",
              (int)remote_wakeup_en, wake_state_name(state));
     host_suspended = true;
+    wol_fired_this_spell = false; // new suspend spell -> allow one WOL again
     host_resumed_event = false;
     usb_set_host_suspended(true);
 

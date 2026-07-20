@@ -260,12 +260,42 @@ footer .kofi:hover{text-decoration:none;opacity:.9}
 <section class="pane" id="pane_network">
 
 <div class="hint" style="margin-top:1rem">This page is served over your home
-  WiFi at <b>http://ds5.local/</b> (the USB network adapter of older firmware
-  is gone — the adapter now looks like a plain DualSense over USB). To move
-  the adapter to a different WiFi network, use the <b>WiFi setup</b> button
-  below: it reboots into the <b>DS5-Setup-XXXX</b> setup network (password
-  <b>dualsense</b>). Wake-on-LAN settings will live here in a coming
-  firmware.</div>
+  WiFi at <b>http://<span id="host_echo">ds5</span>.local/</b>. To move the
+  adapter to a different WiFi network, use the <b>WiFi setup</b> button below
+  (setup network <b>DS5-Setup-XXXX</b>, password <b>dualsense</b>).</div>
+
+<div class="field">
+  <label class="lbl" for="hostname">Device name</label>
+  <input id="hostname" maxlength="10" autocomplete="off" spellcheck="false"
+         placeholder="ds5">
+  <div class="hint">The name this page lives at: <b>http://&lt;name&gt;.local/</b>.
+  Lowercase letters, digits and hyphens, up to 10 characters — anything else is
+  dropped on save. Give each adapter its own name if you have several. Takes
+  effect after the adapter restarts.</div>
+</div>
+
+<div class="field">
+  <label class="lbl">Wake-on-LAN</label>
+  <div class="hint">Pressing the PS button while the PC sleeps wakes it over
+  USB (sleep) and by magic packet to the targets below (hibernate/soft-off —
+  needs Wake-on-LAN enabled in the PC's BIOS/NIC). Leave blank to disable a
+  target.</div>
+  <input id="wol_mac1" autocomplete="off" spellcheck="false" style="margin-top:.4rem"
+         placeholder="PC MAC, e.g. A1:B2:C3:D4:E5:F6">
+  <input id="wol_mac2" autocomplete="off" spellcheck="false" style="margin-top:.4rem"
+         placeholder="2nd target (optional, e.g. a TV)">
+  <div class="row" style="margin-top:.5rem;display:flex;gap:.5rem">
+    <input id="find_ip" autocomplete="off" spellcheck="false"
+           placeholder="Find MAC by IP, e.g. 192.168.1.50" style="flex:1">
+    <button id="find_mac" type="button" style="background:#3a3a3a">Find MAC</button>
+  </div>
+  <div class="hint">Find MAC asks the device at that IP (must be awake and on
+  this network) for its hardware address and fills the first empty target.</div>
+  <div class="btns" style="margin-top:.5rem">
+    <button id="wake_now" type="button">Wake now</button>
+    <span id="nstatus"></span>
+  </div>
+</div>
 
 </section>
 
@@ -314,6 +344,21 @@ const upd=[bindRange('audio_buffer_length','ab_val'),bindRange('inactive_time','
 function markDirty(){$('save').disabled=false;setStatus('unsaved changes','dirty')}
 ['controller_mode','polling_rate_mode','disable_inactive_disconnect','disable_pico_led','player_led_lock','lightbar_override','lightbar_filter_rgb','idle_rgb']
   .forEach(id=>$(id).onchange=markDirty);
+['hostname','wol_mac1','wol_mac2'].forEach(id=>$(id).oninput=markDirty);
+
+// ----- Network helpers -----
+// "AABBCCDDEEFF" -> "AA:BB:CC:DD:EE:FF" for display; all-zero = unset -> ''.
+function macToDisplay(h){
+  if(!h||h==='000000000000')return'';
+  return h.match(/../g).join(':');
+}
+// User input -> 12 uppercase hex (separators stripped), '' -> all-zero
+// (clears the target), null -> invalid.
+function macFromInput(s){
+  s=s.replace(/[:\-\s.]/g,'').toUpperCase();
+  if(s==='')return'000000000000';
+  return /^[0-9A-F]{12}$/.test(s)?s:null;
+}
 
 async function load(){
   try{
@@ -328,6 +373,9 @@ async function load(){
     $('player_led_lock').checked=!c.disable_player_led_lock;
     $('lightbar_override').checked=!c.disable_lightbar_override;
     if(c.lightbar_filter_rgb)$('lightbar_filter_rgb').value='#'+c.lightbar_filter_rgb.toLowerCase();
+    if(c.hostname){$('hostname').value=c.hostname;$('host_echo').textContent=c.hostname}
+    $('wol_mac1').value=macToDisplay(c.wol_target_mac);
+    $('wol_mac2').value=macToDisplay(c.wol_target_mac2);
     const sc=$('slot_colors');
     if(sc.children.length===0){
       for(let i=0;i<(c.max_slots||4);i++){
@@ -368,6 +416,10 @@ async function save(){
     'disable_lightbar_override='+($('lightbar_override').checked?0:1),
     'lightbar_filter_rgb='+$('lightbar_filter_rgb').value.slice(1)
   ];
+  const m1=macFromInput($('wol_mac1').value),m2=macFromInput($('wol_mac2').value);
+  if(m1===null||m2===null){setStatus('bad MAC address — use AA:BB:CC:DD:EE:FF','err');return}
+  parts.push('wol_target_mac='+m1,'wol_target_mac2='+m2,
+             'hostname='+encodeURIComponent($('hostname').value.trim()));
   for(let i=0;i<4;i++){
     const el=$('slot_rgb'+i);
     if(el)parts.push('slot_rgb'+i+'='+el.value.slice(1));
@@ -429,6 +481,45 @@ async function wifiReset(){
   }catch(e){setStatus('WiFi reset unavailable (no WiFi firmware?)','err')}
 }
 $('wifireset').onclick=wifiReset;
+
+// ----- Network pane actions -----
+function setNStatus(t,c){const s=$('nstatus');s.className=c||'';s.textContent=t}
+
+$('wake_now').onclick=async()=>{
+  setNStatus('waking…','dirty');
+  try{
+    const r=await fetch('/api/wol',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'action=wake'});
+    if(!r.ok)throw 0;
+    const d=await r.json();
+    setNStatus(d.ok?'magic packet sent ✓':'nothing sent — save a target MAC first',d.ok?'ok':'err');
+  }catch(e){setNStatus('wake request failed','err')}
+};
+
+$('find_mac').onclick=async()=>{
+  const ip=$('find_ip').value.trim();
+  if(!/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)){setNStatus('enter an IP like 192.168.1.50','err');return}
+  setNStatus('resolving…','dirty');
+  try{
+    const r=await fetch('/api/resolve_mac',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'ip='+ip});
+    if(!r.ok)throw 0;
+    // The POST only starts the ARP lookup; poll for the result.
+    for(let i=0;i<10;i++){
+      const d=await(await fetch('/api/resolve_mac')).json();
+      if(!d.pending){
+        if(d.ok){
+          const tgt=$('wol_mac1').value.trim()?($('wol_mac2').value.trim()?null:'wol_mac2'):'wol_mac1';
+          if(tgt){$(tgt).value=macToDisplay(d.mac);markDirty()}
+          setNStatus('found '+macToDisplay(d.mac)+(tgt?' — remember to Save':' (both targets full — copy it manually)'),'ok');
+        }else{
+          setNStatus('no answer — is the device awake and on this network?','err');
+        }
+        return;
+      }
+      await new Promise(res=>setTimeout(res,300));
+    }
+    setNStatus('timed out','err');
+  }catch(e){setNStatus('resolve failed','err')}
+};
 
 // ----- Paired controllers -----
 function fmtAddr(h){return h.match(/.{2}/g).join(':')}

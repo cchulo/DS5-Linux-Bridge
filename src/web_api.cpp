@@ -44,6 +44,10 @@ static bool provision_ok;
 static bool wifi_reset_ok;
 #endif
 
+// Result of the most recent POST /api/wol ("Wake now"), reported via the
+// synthetic /api/wol_result route (read in fs_open_custom, set below it).
+static bool last_wol_ok;
+
 //--------------------------------------------------------------------+
 // HTTP content: / (page), /api/config -- via fs_open_custom
 //--------------------------------------------------------------------+
@@ -68,8 +72,15 @@ static int make_file(struct fs_file *file, const char *status, const char *conte
     return 1;
 }
 
+// "AABBCCDDEEFF" (12 hex, no separators). Forward declaration; defined with
+// the bond helpers below.
+static void addr_to_hex(const uint8_t *a, char out[13]);
+
 static int json_config(char *out, size_t cap) {
     const Config_body &c = get_config();
+    char wol_hex[13], wol_hex2[13];
+    addr_to_hex(c.wol_target_mac, wol_hex);
+    addr_to_hex(c.wol_target_mac2, wol_hex2);
     return snprintf(out, cap,
                     "{\"version\":\"%s\","
                     "\"inactive_time\":%u,"
@@ -78,6 +89,12 @@ static int json_config(char *out, size_t cap) {
                     "\"polling_rate_mode\":%u,"
                     "\"audio_buffer_length\":%u,"
                     "\"controller_mode\":%u,"
+                    // hostname is sanitized to [a-z0-9-] in config_valid(), so
+                    // it never needs JSON string escaping here. MACs are
+                    // "AABBCCDDEEFF"; all-zero == unset.
+                    "\"hostname\":\"%s\","
+                    "\"wol_target_mac\":\"%s\","
+                    "\"wol_target_mac2\":\"%s\","
                     "\"slot_rgb\":[\"%02X%02X%02X\",\"%02X%02X%02X\","
                     "\"%02X%02X%02X\",\"%02X%02X%02X\"],"
                     "\"led_count\":%u,"
@@ -97,6 +114,9 @@ static int json_config(char *out, size_t cap) {
                     c.polling_rate_mode,
                     c.audio_buffer_length,
                     c.controller_mode,
+                    c.hostname,
+                    wol_hex,
+                    wol_hex2,
                     c.slot_rgb[0][0], c.slot_rgb[0][1], c.slot_rgb[0][2],
                     c.slot_rgb[1][0], c.slot_rgb[1][1], c.slot_rgb[1][2],
                     c.slot_rgb[2][0], c.slot_rgb[2][1], c.slot_rgb[2][2],
@@ -354,6 +374,31 @@ extern "C" int fs_open_custom(struct fs_file *file, const char *name) {
         const int len = weblog_snapshot(logbuf, sizeof(logbuf));
         return make_file(file, "200 OK", "text/plain; charset=utf-8", logbuf, len);
     }
+    // ARP-resolve poll, kicked off by POST /api/resolve_mac. The POST only
+    // starts the lookup; the browser polls this GET until "pending":false,
+    // then either {"ok":true,"mac":"AABBCCDDEEFF"} or {"ok":false}.
+    if (strcmp(name, "/api/resolve_mac") == 0) {
+        uint8_t mac[6];
+        const int r = wifi_resolve_mac_poll_result(mac);
+        int len;
+        if (r == 0) {
+            len = snprintf(body, sizeof(body), "{\"pending\":true}");
+        } else if (r > 0) {
+            char hex[13];
+            addr_to_hex(mac, hex);
+            len = snprintf(body, sizeof(body),
+                           "{\"pending\":false,\"ok\":true,\"mac\":\"%s\"}", hex);
+        } else {
+            len = snprintf(body, sizeof(body), "{\"pending\":false,\"ok\":false}");
+        }
+        return make_file(file, "200 OK", "application/json", body, len);
+    }
+    // Synthetic reply for POST /api/wol ("Wake now").
+    if (strcmp(name, "/api/wol_result") == 0) {
+        const int len = snprintf(body, sizeof(body), "{\"ok\":%s}",
+                                 last_wol_ok ? "true" : "false");
+        return make_file(file, "200 OK", "application/json", body, len);
+    }
 #ifdef ENABLE_WIFI_WOL
     if (strcmp(name, "/api/wifi_scan") == 0) {
         // A scan is kicked off on first hit; later hits are the portal's
@@ -443,7 +488,8 @@ static char post_buf[POST_BUFSIZE];
 static u16_t post_pos;
 static void *post_conn;
 enum post_target_t { POST_CONFIG, POST_BONDS, POST_SLOTS, POST_LED, POST_REBOOT,
-                     POST_WIFI_PROVISION, POST_WIFI_RESET };
+                     POST_WIFI_PROVISION, POST_WIFI_RESET, POST_WOL,
+                     POST_RESOLVE_MAC };
 static post_target_t post_target; // which endpoint the in-flight POST targets
 static int post_content_len; // declared Content-Length; -1 = none sent
 static bool last_save_ok = true; // result of the most recent config_save()
@@ -513,6 +559,25 @@ static void apply_post(char *body) {
             c.audio_buffer_length = (uint8_t) clampi(val, 16, 128);
         } else if (strcmp(tok, "controller_mode") == 0) {
             c.controller_mode = (uint8_t) clampi(val, 0, 2);
+        } else if (strcmp(tok, "wol_target_mac") == 0) {
+            // 12 hex chars, no separators (the page strips ':'/'-' client-side).
+            // Reject anything malformed so a bad POST can't store a junk MAC; an
+            // all-zero MAC is the canonical "unset" and is allowed (clears it).
+            uint8_t mac[6];
+            if (hex_to_addr(eq, mac)) memcpy(c.wol_target_mac, mac, 6);
+        } else if (strcmp(tok, "wol_target_mac2") == 0) {
+            // Second WOL target (e.g. a TV). Same parse/unset convention as #1.
+            uint8_t mac[6];
+            if (hex_to_addr(eq, mac)) memcpy(c.wol_target_mac2, mac, 6);
+        } else if (strcmp(tok, "hostname") == 0) {
+            // mDNS / netif hostname. url_decode then copy raw; set_config() ->
+            // config_valid() -> sanitize_hostname() folds case and strips any
+            // non-DNS-label chars (and re-defaults if empty), so we don't
+            // filter here. Takes effect on the next boot (the netif/mDNS name
+            // is set at init).
+            url_decode(eq);
+            strncpy(c.hostname, eq, CONFIG_HOSTNAME_LEN - 1);
+            c.hostname[CONFIG_HOSTNAME_LEN - 1] = '\0';
         } else if (strcmp(tok, "disable_player_led_lock") == 0) {
             c.disable_player_led_lock = val ? 1 : 0;
         } else if (strcmp(tok, "disable_lightbar_override") == 0) {
@@ -820,6 +885,47 @@ static void apply_wifi_reset_post(void) {
 }
 #endif
 
+// POST /api/wol -- action=wake[&mac=AABBCCDDEEFF]. With an explicit mac, wakes
+// exactly that target. With no mac (the page's "Wake now" button), fires EVERY
+// stored target (wol_target_mac + wol_target_mac2).
+static void apply_wol_post(char *body) {
+    char action[16] = "";
+    uint8_t mac[6];
+    bool have_mac = false;
+    for (char *tok = strtok(body, "&"); tok; tok = strtok(nullptr, "&")) {
+        char *eq = strchr(tok, '=');
+        if (!eq) continue;
+        *eq++ = 0;
+        if (strcmp(tok, "action") == 0) strncpy(action, eq, sizeof(action) - 1);
+        else if (strcmp(tok, "mac") == 0 && hex_to_addr(eq, mac)) have_mac = true;
+    }
+    last_wol_ok = false;
+    if (strcmp(action, "wake") != 0) return;
+    last_wol_ok = have_mac ? wifi_wol_send(mac) : wifi_wol_send_all();
+    printf("[NET] WOL via web UI: %s\n", last_wol_ok ? "sent" : "send failed");
+}
+
+// POST /api/resolve_mac -- ip=A.B.C.D. Kicks off an ARP lookup for that
+// address so the UI can auto-fill the WOL target MAC instead of the user
+// hunting it down by hand. Non-blocking: this only STARTS the lookup (the
+// httpd POST callback runs nested inside lwIP's tcp_input, so it must never
+// pump the stack); the browser polls GET /api/resolve_mac for the result once
+// wifi_net_task() has driven the ARP query.
+static void apply_resolve_mac_post(char *body) {
+    unsigned a = 0, b = 0, cc = 0, d = 0;
+    char *eq = strchr(body, '=');
+    const bool parsed = eq &&
+             sscanf(eq + 1, "%u.%u.%u.%u", &a, &b, &cc, &d) == 4 &&
+             a <= 255 && b <= 255 && cc <= 255 && d <= 255;
+    if (!parsed) {
+        printf("[NET] resolve_mac POST: bad ip\n");
+        return;
+    }
+    const uint8_t ip[4] = {(uint8_t) a, (uint8_t) b, (uint8_t) cc, (uint8_t) d};
+    wifi_resolve_mac_start(ip);
+    printf("[NET] resolving %u.%u.%u.%u...\n", a, b, cc, d);
+}
+
 extern "C" err_t httpd_post_begin(void *connection, const char *uri, const char *http_request,
                                   u16_t http_request_len, int content_len, char *response_uri,
                                   u16_t response_uri_len, u8_t *post_auto_wnd) {
@@ -836,6 +942,8 @@ extern "C" err_t httpd_post_begin(void *connection, const char *uri, const char 
     else if (strcmp(uri, "/api/led") == 0) target = POST_LED;
 #endif
     else if (strcmp(uri, "/api/reboot") == 0) target = POST_REBOOT;
+    else if (strcmp(uri, "/api/wol") == 0) target = POST_WOL;
+    else if (strcmp(uri, "/api/resolve_mac") == 0) target = POST_RESOLVE_MAC;
 #ifdef ENABLE_WIFI_WOL
     else if (strcmp(uri, "/api/wifi_provision") == 0) target = POST_WIFI_PROVISION;
     else if (strcmp(uri, "/api/wifi_reset") == 0) target = POST_WIFI_RESET;
@@ -912,6 +1020,14 @@ extern "C" void httpd_post_finished(void *connection, char *response_uri, u16_t 
             apply_reboot_post(post_buf);
             snprintf(response_uri, response_uri_len,
                      last_action_ok ? "/api/reboot-ok" : "/api/action-failed");
+            break;
+        case POST_WOL:
+            apply_wol_post(post_buf);
+            snprintf(response_uri, response_uri_len, "/api/wol_result");
+            break;
+        case POST_RESOLVE_MAC:
+            apply_resolve_mac_post(post_buf);
+            snprintf(response_uri, response_uri_len, "/api/resolve_mac");
             break;
 #ifdef ENABLE_WIFI_WOL
         case POST_WIFI_PROVISION:
