@@ -165,6 +165,7 @@ set_source_files_properties(src/ram_mem.c PROPERTIES COMPILE_OPTIONS
 if (ENABLE_WIFI_WOL)
     target_sources(ds5-bridge PRIVATE
             src/web_api.cpp
+            src/hid_config.cpp
             src/wifi_net.cpp
             # Onboarding captive portal (AP mode): tiny DHCP + DNS servers so a
             # phone gets a lease and every lookup resolves to the portal page.

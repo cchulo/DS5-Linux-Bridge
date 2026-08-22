@@ -315,6 +315,102 @@ static int json_slots(char *out, size_t cap) {
     return w;
 }
 
+//--------------------------------------------------------------------+
+// Transport-agnostic route layer
+//
+// Every GET route renders its body into a caller-supplied buffer and reports
+// an HTTP-style status; every POST dispatches and returns the synthetic
+// result route whose GET carries the outcome (see web_api_post below).
+// lwIP httpd (fs_open_custom / httpd_post_*) and the USB HID config tunnel
+// (hid_config.cpp) are both thin adapters over these two functions, so the
+// JSON shapes, form parsing and validation are shared byte-for-byte.
+//--------------------------------------------------------------------+
+
+static int put_text(char *out, size_t cap, const char *s) {
+    const size_t n = strlen(s);
+    const size_t m = n < cap ? n : cap;
+    memcpy(out, s, m);
+    return (int) m;
+}
+
+int web_api_get(const char *name, char *out, size_t cap, int *status) {
+    *status = 200;
+    int len = -1;
+    if (strcmp(name, "/api/config") == 0) {
+        len = json_config(out, cap);
+    } else if (strcmp(name, "/api/bonds") == 0) {
+        len = json_bonds(out, cap);
+    } else if (strcmp(name, "/api/status") == 0) {
+        len = json_status(out, cap);
+    } else if (strcmp(name, "/api/slots") == 0) {
+        len = json_slots(out, cap);
+    } else if (strcmp(name, "/api/log") == 0) {
+        // Firmware log (RAM ring of all printf diagnostics; see weblog.h).
+        // Plain text so it reads directly in a browser tab.
+        len = weblog_snapshot(out, (int) cap);
+    } else if (strcmp(name, "/api/resolve_mac") == 0) {
+        // ARP-resolve poll, kicked off by POST /api/resolve_mac. The POST only
+        // starts the lookup; the client polls this GET until "pending":false,
+        // then either {"ok":true,"mac":"AABBCCDDEEFF"} or {"ok":false}.
+        uint8_t mac[6];
+        const int r = wifi_resolve_mac_poll_result(mac);
+        if (r == 0) {
+            len = snprintf(out, cap, "{\"pending\":true}");
+        } else if (r > 0) {
+            char hex[13];
+            addr_to_hex(mac, hex);
+            len = snprintf(out, cap, "{\"pending\":false,\"ok\":true,\"mac\":\"%s\"}", hex);
+        } else {
+            len = snprintf(out, cap, "{\"pending\":false,\"ok\":false}");
+        }
+    } else if (strcmp(name, "/api/wol_result") == 0) {
+        // Synthetic reply for POST /api/wol ("Wake now").
+        len = snprintf(out, cap, "{\"ok\":%s}", last_wol_ok ? "true" : "false");
+#ifdef ENABLE_WIFI_WOL
+    } else if (strcmp(name, "/api/wifi_scan") == 0) {
+        // A scan is kicked off on first hit; later hits are the portal's
+        // rate-limited refresh (see wifi_scan_start guards). Only live in AP
+        // mode (wifi_scan_start no-ops otherwise; the list is then empty).
+        wifi_scan_start();
+        len = wifi_scan_json(out, cap);
+    } else if (strcmp(name, "/api/wifi_provision_result") == 0) {
+        // Synthetic reply for the provision POST: whether the creds were
+        // accepted; the device reboots to join shortly after.
+        len = snprintf(out, cap, "{\"ok\":%s}", provision_ok ? "true" : "false");
+    } else if (strcmp(name, "/api/wifi_reset_result") == 0) {
+        // Synthetic reply for POST /api/wifi_reset: if ok, the stored WiFi
+        // credentials are cleared and the device reboots.
+        len = snprintf(out, cap, "{\"ok\":%s}", wifi_reset_ok ? "true" : "false");
+#endif
+    } else if (strcmp(name, "/api/action-failed") == 0) {
+        // POST /api/slots or /api/led land here when the action was refused
+        // (bad indices, slot mid-setup, LED debug on a build without the
+        // strip). Non-2xx so the client's `ok` check is false.
+        *status = 409;
+        len = put_text(out, cap, "action failed");
+    } else if (strcmp(name, "/api/pair-rejected") == 0) {
+        // POST /api/bonds action=pair lands here when pairing was refused (all
+        // bond seats occupied, or all slots connected on a multi-slot build).
+        *status = 409;
+        len = put_text(out, cap, "pairing rejected: no free controller slot or bond seat");
+    } else if (strcmp(name, "/api/reboot-ok") == 0) {
+        // POST /api/reboot lands here once the BOOTSEL reboot is armed; the
+        // device drops off the bus ~0.5 s later and re-enumerates as the ROM
+        // UF2 mass-storage bootloader.
+        len = put_text(out, cap, "rebooting to BOOTSEL");
+    } else if (strcmp(name, "/api/save-failed") == 0) {
+        // POST /api/config lands here when config_save() failed to reach
+        // flash. Non-2xx so the client shows an error instead of "Saved".
+        *status = 500;
+        len = put_text(out, cap, "config save failed: flash not written");
+    } else if (strcmp(name, "/404.html") == 0) {
+        *status = 404;
+        len = put_text(out, cap, "not found");
+    }
+    if (len > (int) cap) len = (int) cap; // snprintf reports the untruncated size
+    return len;
+}
+
 extern "C" int fs_open_custom(struct fs_file *file, const char *name) {
 #ifdef ENABLE_WIFI_WOL
     // Onboarding mode: serve the captive portal for essentially every GET.
@@ -359,116 +455,21 @@ extern "C" int fs_open_custom(struct fs_file *file, const char *name) {
         file->flags = FS_FILE_FLAGS_HEADER_INCLUDED;
         return 1;
     }
-    // Shared JSON scratch: make_file() copies the body into its own malloc'd
-    // buffer before returning, and httpd serves one custom file at a time, so a
-    // single static buffer is safe for both JSON routes (saves BSS -> heap).
-    static char body[1024]; // sized for /api/config (largest JSON route)
-    if (strcmp(name, "/api/config") == 0) {
-        const int len = json_config(body, sizeof(body));
-        return make_file(file, "200 OK", "application/json", body, len);
-    }
-    if (strcmp(name, "/api/bonds") == 0) {
-        const int len = json_bonds(body, sizeof(body));
-        return make_file(file, "200 OK", "application/json", body, len);
-    }
-    if (strcmp(name, "/api/status") == 0) {
-        const int len = json_status(body, sizeof(body));
-        return make_file(file, "200 OK", "application/json", body, len);
-    }
-    if (strcmp(name, "/api/slots") == 0) {
-        const int len = json_slots(body, sizeof(body));
-        return make_file(file, "200 OK", "application/json", body, len);
-    }
-    // Firmware log (RAM ring of all printf diagnostics; see weblog.h).
-    // Plain text so it reads directly in a browser tab.
-    if (strcmp(name, "/api/log") == 0) {
-        static char logbuf[2113]; // frozen boot KB + gap marker + recent KB
-        const int len = weblog_snapshot(logbuf, sizeof(logbuf));
-        return make_file(file, "200 OK", "text/plain; charset=utf-8", logbuf, len);
-    }
-    // ARP-resolve poll, kicked off by POST /api/resolve_mac. The POST only
-    // starts the lookup; the browser polls this GET until "pending":false,
-    // then either {"ok":true,"mac":"AABBCCDDEEFF"} or {"ok":false}.
-    if (strcmp(name, "/api/resolve_mac") == 0) {
-        uint8_t mac[6];
-        const int r = wifi_resolve_mac_poll_result(mac);
-        int len;
-        if (r == 0) {
-            len = snprintf(body, sizeof(body), "{\"pending\":true}");
-        } else if (r > 0) {
-            char hex[13];
-            addr_to_hex(mac, hex);
-            len = snprintf(body, sizeof(body),
-                           "{\"pending\":false,\"ok\":true,\"mac\":\"%s\"}", hex);
-        } else {
-            len = snprintf(body, sizeof(body), "{\"pending\":false,\"ok\":false}");
-        }
-        return make_file(file, "200 OK", "application/json", body, len);
-    }
-    // Synthetic reply for POST /api/wol ("Wake now").
-    if (strcmp(name, "/api/wol_result") == 0) {
-        const int len = snprintf(body, sizeof(body), "{\"ok\":%s}",
-                                 last_wol_ok ? "true" : "false");
-        return make_file(file, "200 OK", "application/json", body, len);
-    }
-#ifdef ENABLE_WIFI_WOL
-    if (strcmp(name, "/api/wifi_scan") == 0) {
-        // A scan is kicked off on first hit; later hits are the portal's
-        // rate-limited refresh (see wifi_scan_start guards). Only live in AP
-        // mode (wifi_scan_start no-ops otherwise; the list is then empty).
-        wifi_scan_start();
-        static char scanbuf[1024];
-        const int len = wifi_scan_json(scanbuf, sizeof(scanbuf));
-        return make_file(file, "200 OK", "application/json", scanbuf, len);
-    }
-    if (strcmp(name, "/api/wifi_provision_result") == 0) {
-        // Synthetic reply for the provision POST (see httpd_post_finished).
-        // Reports whether the creds were accepted; the device reboots into STA
-        // shortly after.
-        const int len = snprintf(body, sizeof(body), "{\"ok\":%s}",
-                                 provision_ok ? "true" : "false");
-        return make_file(file, "200 OK", "application/json", body, len);
-    }
-    if (strcmp(name, "/api/wifi_reset_result") == 0) {
-        // Synthetic reply for POST /api/wifi_reset. If ok, the device has
-        // cleared its WiFi credentials and will reboot into AP onboarding.
-        const int len = snprintf(body, sizeof(body), "{\"ok\":%s}",
-                                 wifi_reset_ok ? "true" : "false");
-        return make_file(file, "200 OK", "application/json", body, len);
-    }
-#endif
-    // POST /api/config redirects here when config_save() failed to reach flash.
-    // Returning a non-2xx status makes the page's `r.ok` check false so it shows
-    // an error instead of "Saved ✓" for a change that never persisted.
-    // POST /api/slots or /api/led redirects here when the action was refused
-    // (bad indices, slot mid-setup, LED debug on a build without the strip).
-    if (strcmp(name, "/api/action-failed") == 0) {
-        static const char af[] = "action failed";
-        return make_file(file, "409 Conflict", "text/plain", af, sizeof(af) - 1);
-    }
-    // POST /api/bonds action=pair redirects here when the pairing request was
-    // refused (all bond seats occupied, or all slots connected on a multi-slot
-    // build). Non-2xx so the page can show a specific message.
-    if (strcmp(name, "/api/pair-rejected") == 0) {
-        static const char pr[] = "pairing rejected: no free controller slot or bond seat";
-        return make_file(file, "409 Conflict", "text/plain", pr, sizeof(pr) - 1);
-    }
-    // POST /api/reboot redirects here once the BOOTSEL reboot is armed; the
-    // device drops off the bus ~0.5 s after this response is sent and
-    // re-enumerates as the ROM UF2 mass-storage bootloader.
-    if (strcmp(name, "/api/reboot-ok") == 0) {
-        static const char rb[] = "rebooting to BOOTSEL";
-        return make_file(file, "200 OK", "text/plain", rb, sizeof(rb) - 1);
-    }
-    if (strcmp(name, "/api/save-failed") == 0) {
-        static const char sf[] = "config save failed: flash not written";
-        return make_file(file, "500 Internal Server Error", "text/plain", sf, sizeof(sf) - 1);
-    }
-    if (strcmp(name, "/404.html") == 0) {
-        static const char nf[] = "not found";
-        return make_file(file, "404 Not Found", "text/plain", nf, sizeof(nf) - 1);
-    }
-    return 0;
+    // Shared scratch: make_file() copies the body into its own malloc'd
+    // buffer before returning, and httpd serves one custom file at a time,
+    // so one static buffer covers every route (saves BSS -> heap). Sized for
+    // the largest route (/api/log).
+    static char body[WEB_API_RESP_CAP];
+    int status = 0;
+    const int len = web_api_get(name, body, sizeof(body), &status);
+    if (len < 0) return 0; // unknown route -> lwIP's default 404
+    const char *st = status == 200 ? "200 OK"
+                   : status == 404 ? "404 Not Found"
+                   : status == 409 ? "409 Conflict"
+                   : "500 Internal Server Error";
+    const char *ct = (len > 0 && body[0] == '{') ? "application/json"
+                                                 : "text/plain; charset=utf-8";
+    return make_file(file, st, ct, body, len);
 }
 
 extern "C" void fs_close_custom(struct fs_file *file) {
@@ -966,6 +967,79 @@ static void apply_resolve_mac_post(char *body) {
     printf("[NET] resolving %u.%u.%u.%u...\n", a, b, cc, d);
 }
 
+// Resolve a POST URI to its handler; false if unknown.
+static bool post_target_for(const char *uri, post_target_t *target) {
+    if (strcmp(uri, "/api/config") == 0) *target = POST_CONFIG;
+    else if (strcmp(uri, "/api/bonds") == 0) *target = POST_BONDS;
+    else if (strcmp(uri, "/api/slots") == 0) *target = POST_SLOTS;
+#ifdef ENABLE_LED_STRIP
+    else if (strcmp(uri, "/api/led") == 0) *target = POST_LED;
+#endif
+    else if (strcmp(uri, "/api/reboot") == 0) *target = POST_REBOOT;
+    else if (strcmp(uri, "/api/wol") == 0) *target = POST_WOL;
+    else if (strcmp(uri, "/api/resolve_mac") == 0) *target = POST_RESOLVE_MAC;
+#ifdef ENABLE_WIFI_WOL
+    else if (strcmp(uri, "/api/wifi_provision") == 0) *target = POST_WIFI_PROVISION;
+    else if (strcmp(uri, "/api/wifi_reset") == 0) *target = POST_WIFI_RESET;
+#endif
+    else return false;
+    return true;
+}
+
+// Apply a POST body (form-encoded, mutated in place by the strtok parsers)
+// and return the synthetic result route whose GET reports the outcome.
+static const char *dispatch_post(post_target_t target, char *body) {
+    switch (target) {
+        case POST_BONDS:
+            apply_bonds_post(body);
+            return last_pair_rejected ? "/api/pair-rejected"
+                     : (last_save_ok ? "/api/bonds" : "/api/save-failed");
+        case POST_SLOTS:
+            apply_slots_post(body);
+            return last_action_ok ? "/api/slots" : "/api/action-failed";
+
+#ifdef ENABLE_LED_STRIP
+        case POST_LED:
+            apply_led_post(body);
+            return last_action_ok ? "/api/slots" : "/api/action-failed";
+
+#endif
+        case POST_REBOOT:
+            apply_reboot_post(body);
+            return last_action_ok ? "/api/reboot-ok" : "/api/action-failed";
+        case POST_WOL:
+            apply_wol_post(body);
+            return "/api/wol_result";
+        case POST_RESOLVE_MAC:
+            apply_resolve_mac_post(body);
+            return "/api/resolve_mac";
+
+#ifdef ENABLE_WIFI_WOL
+        case POST_WIFI_PROVISION:
+            apply_wifi_provision_post(body);
+            // The reply is served from the synthetic result route, which reports
+            // provision_ok set just above. (The reboot is deferred ~1.2s by
+            // wifi_net.cpp so this response reaches the phone first.)
+            return "/api/wifi_provision_result";
+        case POST_WIFI_RESET:
+            apply_wifi_reset_post();
+            return "/api/wifi_reset_result";
+
+#endif
+        case POST_CONFIG:
+        default:
+            apply_post(body);
+            return last_save_ok ? "/api/config" : "/api/save-failed";
+    }
+    return "/api/save-failed"; // unreachable: every case returns
+}
+
+const char *web_api_post(const char *uri, char *body) {
+    post_target_t target;
+    if (!post_target_for(uri, &target)) return nullptr;
+    return dispatch_post(target, body);
+}
+
 extern "C" err_t httpd_post_begin(void *connection, const char *uri, const char *http_request,
                                   u16_t http_request_len, int content_len, char *response_uri,
                                   u16_t response_uri_len, u8_t *post_auto_wnd) {
@@ -975,20 +1049,7 @@ extern "C" err_t httpd_post_begin(void *connection, const char *uri, const char 
     (void) response_uri_len;
     (void) post_auto_wnd;
     post_target_t target;
-    if (strcmp(uri, "/api/config") == 0) target = POST_CONFIG;
-    else if (strcmp(uri, "/api/bonds") == 0) target = POST_BONDS;
-    else if (strcmp(uri, "/api/slots") == 0) target = POST_SLOTS;
-#ifdef ENABLE_LED_STRIP
-    else if (strcmp(uri, "/api/led") == 0) target = POST_LED;
-#endif
-    else if (strcmp(uri, "/api/reboot") == 0) target = POST_REBOOT;
-    else if (strcmp(uri, "/api/wol") == 0) target = POST_WOL;
-    else if (strcmp(uri, "/api/resolve_mac") == 0) target = POST_RESOLVE_MAC;
-#ifdef ENABLE_WIFI_WOL
-    else if (strcmp(uri, "/api/wifi_provision") == 0) target = POST_WIFI_PROVISION;
-    else if (strcmp(uri, "/api/wifi_reset") == 0) target = POST_WIFI_RESET;
-#endif
-    else return ERR_VAL;
+    if (!post_target_for(uri, &target)) return ERR_VAL;
 #ifdef ENABLE_WIFI_WOL
     // In AP onboarding mode reject every POST except the provision flow. The
     // open AP + uninitialized BT means POST /api/bonds action=forgetall
@@ -1037,58 +1098,7 @@ extern "C" void httpd_post_finished(void *connection, char *response_uri, u16_t 
         return;
     }
 
-    switch (post_target) {
-        case POST_BONDS:
-            apply_bonds_post(post_buf);
-            snprintf(response_uri, response_uri_len,
-                     last_pair_rejected ? "/api/pair-rejected"
-                     : (last_save_ok ? "/api/bonds" : "/api/save-failed"));
-            break;
-        case POST_SLOTS:
-            apply_slots_post(post_buf);
-            snprintf(response_uri, response_uri_len,
-                     last_action_ok ? "/api/slots" : "/api/action-failed");
-            break;
-#ifdef ENABLE_LED_STRIP
-        case POST_LED:
-            apply_led_post(post_buf);
-            snprintf(response_uri, response_uri_len,
-                     last_action_ok ? "/api/slots" : "/api/action-failed");
-            break;
-#endif
-        case POST_REBOOT:
-            apply_reboot_post(post_buf);
-            snprintf(response_uri, response_uri_len,
-                     last_action_ok ? "/api/reboot-ok" : "/api/action-failed");
-            break;
-        case POST_WOL:
-            apply_wol_post(post_buf);
-            snprintf(response_uri, response_uri_len, "/api/wol_result");
-            break;
-        case POST_RESOLVE_MAC:
-            apply_resolve_mac_post(post_buf);
-            snprintf(response_uri, response_uri_len, "/api/resolve_mac");
-            break;
-#ifdef ENABLE_WIFI_WOL
-        case POST_WIFI_PROVISION:
-            apply_wifi_provision_post(post_buf);
-            // The reply is served from the synthetic result route, which reports
-            // provision_ok set just above. (The reboot is deferred ~1.2s by
-            // wifi_net.cpp so this response reaches the phone first.)
-            snprintf(response_uri, response_uri_len, "/api/wifi_provision_result");
-            break;
-        case POST_WIFI_RESET:
-            apply_wifi_reset_post();
-            snprintf(response_uri, response_uri_len, "/api/wifi_reset_result");
-            break;
-#endif
-        case POST_CONFIG:
-        default:
-            apply_post(post_buf);
-            snprintf(response_uri, response_uri_len,
-                     last_save_ok ? "/api/config" : "/api/save-failed");
-            break;
-    }
+    snprintf(response_uri, response_uri_len, "%s", dispatch_post(post_target, post_buf));
 }
 
 //--------------------------------------------------------------------+

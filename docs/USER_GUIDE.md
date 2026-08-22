@@ -86,46 +86,29 @@ click **Pair new controller**. This:
 
 ## The configuration page
 
-The adapter serves its own configuration web page — no app, no browser API, no
-internet. It enumerates as a **USB network adapter** alongside the controller and
-serves the page over a tiny onboard HTTP server. The page is reachable **whether
-or not a controller is connected**, and the host keeps a single, stable network
-adapter across controller connect/disconnect.
+The adapter is configured from a single web page that talks to it **directly
+over USB** (WebHID) — no network, no app, nothing to install.
 
-<p align="center">
-  <img src="../assets/webconfig.png" alt="The DS5-Linux-Bridge configuration page, showing the live status card, controller mode and polling-rate selectors, audio-buffer and inactivity-timeout sliders, config-page address, and the paired-controllers list." width="360">
-</p>
-
-1. Open **http://10.55.55.105/** in any browser.
-2. Adjust settings — controller mode, polling rate, audio buffer length,
-   inactivity timeout, auto-disconnect, onboard LED — and click **Save**.
+1. Open `web/index.html` from the firmware repository in **Chrome, Edge, or
+   another Chromium-based browser** (Firefox and Safari do not support WebHID).
+2. Press **Connect to adapter** and pick the **DualSense Wireless Controller**
+   entry in the browser's chooser (that is the adapter).
+3. Adjust settings — controller mode, polling rate, audio buffer length,
+   inactivity timeout, lights, paired controllers — and click **Save**.
    Settings are written to the adapter's flash.
 
-The page address is selectable: three vetted presets — default `10.55.55.105`,
-plus `172.31.55.105` and `192.168.137.105` — in case the default subnet collides
-with your network. Changing it requires unplugging and replugging the adapter,
-after which you browse to the new address. The presets can't lock you out.
+The page works whether or not a controller is connected, and it remembers the
+adapter: on later visits it reconnects by itself. If the adapter is unplugged
+and re-plugged while the page is open, press **Connect** again.
 
-There is also a **Custom…** option for a free-form address. It must be a
-**private** IP (`10.x.x.x`, `172.16–31.x.x`, or `192.168.x.x`) and not a
-`.0`/`.255`; the adapter validates this and **falls back to the default address
-if you enter something unreachable**, so you can't brick the page — but you may
-not land where you expected. The PC gets its DHCP lease in the same `/29` block.
+**WiFi is only used for Wake-on-LAN.** Under **Network**, enter your WiFi name
+and password and press **Save WiFi & restart**; the adapter joins that network
+after restarting so the PS button can send magic packets. With no network
+saved the adapter simply runs with WiFi off. **Forget WiFi** clears it again.
 
-### Multiple adapters on one PC
-
-Each adapter is a separate USB network device, so several can share one host —
-but they all default to `10.55.55.105`, so their config pages would collide. To
-run more than one at once, give each its own address: plug the first adapter in
-**alone**, set it to a different preset (or a Custom address) and Save, then
-unplug it and bring up the next. Three presets cover three adapters out of the
-box; use Custom addresses for more. (This only affects the config page — the
-controllers themselves work regardless. The [Steam Deck plugin](#steam-deck-plugin)
-discovers adapters by probing the presets first.)
-
-Flash writes from the page (saving settings, renaming/forgetting bonds) are made
-**audio-safe**: the audio core is briefly parked during the flash erase/program
-so writing while a controller streams audio doesn't corrupt the stream.
+On Linux the adapter must be accessible to your user. If Steam is installed
+that is already the case (its udev rules cover Sony gamepads); otherwise add a
+udev rule granting access to USB vendor `054c`.
 
 ### Live status
 

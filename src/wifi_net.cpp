@@ -48,6 +48,9 @@
 
 // The CYW43 STA netif, addressed explicitly (see the header note).
 static struct netif *sta_netif() { return &cyw43_state.netif[CYW43_ITF_STA]; }
+// Unprovisioned: the WiFi half of the radio is parked (no STA netif, no join);
+// set in wifi_net_init(). Every LAN path below must bail while this is set.
+static bool sta_idle = false;
 
 //--------------------------------------------------------------------+
 // Wake-on-LAN: 102-byte magic packet broadcast as UDP to 255.255.255.255:9.
@@ -90,7 +93,7 @@ static bool mac_is_zero(const uint8_t mac[6]) {
 // targets. Returns true if at least one packet was sent. Skips silently in AP
 // onboarding mode (no LAN uplink -- the caller usually gates this too).
 bool wifi_wol_send_all(void) {
-    if (wifi_net_in_ap_mode()) return false;
+    if (wifi_net_in_ap_mode() || sta_idle) return false; // no LAN uplink
     const Config_body &c = get_config();
     const uint8_t *targets[2] = { c.wol_target_mac, c.wol_target_mac2 };
     bool any = false;
@@ -169,7 +172,7 @@ int wifi_resolve_mac_poll_result(uint8_t out_mac[6]) {
 extern "C" bool wake_emit_wol(void) {
     // No LAN in onboarding mode -- the SoftAP carries only the local portal, so
     // a magic packet has nowhere to go. (wifi_wol_send_all() re-checks this too.)
-    if (wifi_net_in_ap_mode()) return false;
+    if (wifi_net_in_ap_mode() || sta_idle) return false;
     // Wake every configured target (PC + optional 2nd, e.g. a TV).
     return wifi_wol_send_all();
 }
@@ -476,10 +479,18 @@ bool wifi_reset_provisioning_apply() {
 
 void wifi_net_init() {
     const bool provisioned = get_config().wifi_provisioned;
-    if (force_ap || !provisioned) {
-        wifi_ap_init();       // onboarding
+    if (force_ap) {
+        wifi_ap_init();       // onboarding portal (only when explicitly forced)
+    } else if (!provisioned) {
+        // No credentials yet: stay a plain dongle (BT + USB up, WiFi half of
+        // the radio idle). Credentials are entered on the config page over
+        // USB (hid_config.cpp -> POST /api/wifi_provision), which persists
+        // them and reboots into STA. The AP captive portal is no longer the
+        // onboarding path, so an unprovisioned dongle never loses BT.
+        sta_idle = true;
+        printf("[wifi] unprovisioned: WiFi idle (set credentials from the config page over USB)\n");
     } else {
-        wifi_sta_init();      // normal operation
+        wifi_sta_init();      // normal operation (WOL uplink)
     }
     web_api_init(); // idempotent; serves portal (AP) or config page (STA)
 }
@@ -505,6 +516,11 @@ void wifi_net_task() {
         }
         return; // no STA link tracking / WOL while onboarding
     }
+
+    // Unprovisioned: no STA netif exists, so there is no link to supervise,
+    // no ARP to poll and nothing to retry. (The deferred-reboot check above
+    // still runs, which is how provisioning over USB takes effect.)
+    if (sta_idle) return;
 
     wifi_resolve_poll();
 

@@ -9,6 +9,8 @@
 #ifndef DS5_BRIDGE_WEB_API_H
 #define DS5_BRIDGE_WEB_API_H
 
+#include <stddef.h>
+
 #ifdef ENABLE_WIFI_WOL
 
 // Start lwIP's httpd. Idempotent; called from wifi_net_init() (AP and STA).
@@ -18,6 +20,20 @@ void web_api_init();
 // reboot, delayed ~500ms so the HTTP response reaches the browser first).
 // Call every main-loop iteration; cheap no-op otherwise.
 void web_api_task();
+
+// --- Transport-agnostic route layer (shared by lwIP httpd and the USB HID
+// config tunnel in hid_config.cpp) ---
+// Largest route body (/api/log: frozen boot KB + marker + rolling tail).
+#define WEB_API_RESP_CAP 2304
+// Render a GET route's body into `out` (no HTTP headers). Returns the body
+// length (clamped to cap), or -1 for an unknown route. *status is the
+// HTTP-style outcome (200 / 404 / 409 / 500).
+int web_api_get(const char *name, char *out, size_t cap, int *status);
+// Apply a form-encoded POST body to a route (the body is parsed in place).
+// Returns the synthetic result route to GET for the outcome (e.g.
+// "/api/config" on success, "/api/save-failed"), or nullptr if `uri` is not
+// a POST route.
+const char *web_api_post(const char *uri, char *body);
 
 #else
 static inline void web_api_init() {}

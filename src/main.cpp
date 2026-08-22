@@ -11,6 +11,7 @@
 #include "pico/cyw43_arch.h"
 #include "state_mgr.h"
 #include "usb.h"
+#include "hid_config.h"
 #include "utils.h"
 #include "wake.h"
 #include "weblog.h"
@@ -353,6 +354,14 @@ uint16_t tud_hid_get_report_cb(uint8_t itf, uint8_t report_id,
   }
   const uint8_t slot = (uint8_t) mapped;
 
+  // USB HID config tunnel (hid_config.h): a "DS5B"-tagged 0x80 command arms
+  // the next 0x81 read; otherwise 0x81 is the pad's own pass-through. Served
+  // on EVERY gamepad interface so the page works with whichever one the
+  // browser's device chooser hands it.
+  if (report_id == HID_CONFIG_REPORT_IN && hid_config_armed()) {
+    return hid_config_get_report(buffer, reqlen);
+  }
+
   BtStatus st;
   bt_get_status(slot, &st);
   if (!st.connected) {
@@ -466,6 +475,13 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id,
       break;
     }
     }
+  }
+  // USB HID config tunnel (hid_config.h): a "DS5B"-tagged feature report
+  // 0x80 is a config command, not a pad command (any gamepad interface).
+  if (report_id == HID_CONFIG_REPORT_OUT &&
+      report_type == HID_REPORT_TYPE_FEATURE &&
+      hid_config_set_report(buffer, bufsize)) {
+    return;
   }
   if (report_id == 0x80 ||
       // DSE: Write Profile Block

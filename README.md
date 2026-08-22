@@ -79,6 +79,26 @@ config page, and OS-specific behavior and troubleshooting.
   radio or draining a pad), chase a test color down the strip, or blank it.
   Everything auto-reverts to live status after 60 s.
 
+### Config page over USB (WebHID) — no network needed
+
+- Open [`web/index.html`](web/index.html) in Chrome/Edge/any Chromium browser
+  (from disk, or hosted anywhere — it is a single static file), press
+  **Connect**, pick the *DualSense Wireless Controller* entry. The page talks
+  to the plugged-in adapter over its own gamepad HID interface: no WiFi, no
+  server, nothing to install. Everything below works over it, including live
+  status.
+- The tunnel rides on feature reports `0x80`/`0x81` — the command/response
+  pair a real DualSense already has — behind a magic signature, so the USB
+  HID descriptor stays byte-identical to real hardware. Protocol and command
+  list: [`src/hid_config.h`](src/hid_config.h); any hidapi/Electron program
+  can drive the same `/api/*` routes.
+- WiFi is now **Wake-on-LAN only**: enter the network under *Network* on the
+  page (saved over USB). With no network saved the adapter boots with WiFi
+  off and BT/USB fully up — there is no captive-portal onboarding anymore.
+- On Linux the adapter must be accessible to your user: with Steam installed
+  its udev rules already cover Sony (`054c`) gamepads; otherwise add a rule
+  for that vendor ID.
+
 ### Web UI
 
 - Live **status card**: per-slot connection state, model, battery percentage
