@@ -374,18 +374,6 @@ message(STATUS "DS5-Linux-Bridge version string: ${DS5_VERSION}")
 pico_set_program_name(ds5-bridge "ds5-bridge")
 pico_set_program_version(ds5-bridge "${DS5_VERSION}")
 
-# Stamped UF2 copy: ds5-bridge-<version>.uf2 next to the canonical
-# ds5-bridge.uf2 (which CI and docs reference -- keep it). The filename
-# carries the exact version string compiled into the image, so the file you
-# flashed and the version the web UI reports pair up by name. Prior stamped
-# copies are removed first so the directory holds exactly one. Added AFTER
-# pico_add_extra_outputs so the UF2 exists when these POST_BUILD steps run.
-add_custom_command(TARGET ds5-bridge POST_BUILD
-        COMMAND sh -c "rm -f ds5-bridge-[0-9]*.uf2"
-        COMMAND ${CMAKE_COMMAND} -E copy ds5-bridge.uf2 ds5-bridge-${DS5_VERSION}.uf2
-        COMMENT "Stamped UF2: ds5-bridge-${DS5_VERSION}.uf2"
-        VERBATIM)
-
 # Diagnostics go over UART0 only (GP0 TX, 115200 8N1). No USB stdio: USB-CDC
 # serial perturbed the USB audio timing it was meant to diagnose.
 pico_enable_stdio_uart(ds5-bridge 1)
@@ -417,6 +405,20 @@ target_link_libraries(ds5-bridge
 )
 
 pico_add_extra_outputs(ds5-bridge)
+
+# Stamped UF2 copy: ds5-bridge-<version>.uf2 next to the canonical
+# ds5-bridge.uf2 (which CI and docs reference -- keep it). The filename
+# carries the exact version string compiled into the image, so the file you
+# flashed and the version the web UI reports pair up by name. Prior stamped
+# copies are removed first so the directory holds exactly one. MUST come
+# AFTER pico_add_extra_outputs: POST_BUILD steps run in declaration order,
+# and until 2026-08-22 this sat above it, so the "stamped" file was the
+# PREVIOUS build's UF2 (one build stale, wrong version inside).
+add_custom_command(TARGET ds5-bridge POST_BUILD
+        COMMAND sh -c "rm -f ds5-bridge-[0-9]*.uf2"
+        COMMAND ${CMAKE_COMMAND} -E copy ds5-bridge.uf2 ds5-bridge-${DS5_VERSION}.uf2
+        COMMENT "Stamped UF2: ds5-bridge-${DS5_VERSION}.uf2"
+        VERBATIM)
 
 # --- Selective RAM relocation ------------------------------------------------
 # Instead of relocating the whole image into RAM (the old memmap_custom.ld
