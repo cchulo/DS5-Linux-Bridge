@@ -27,6 +27,7 @@
 
 #include "bt.h"
 #include "tier.h"
+#include "usb.h"
 #ifdef ENABLE_LED_STRIP
 #include "ledstrip.h"
 #endif
@@ -47,6 +48,44 @@ static bool wifi_reset_ok;
 // Result of the most recent POST /api/wol ("Wake now"), reported via the
 // synthetic /api/wol_result route (read in fs_open_custom, set below it).
 static bool last_wol_ok;
+
+//--------------------------------------------------------------------+
+// Web access gate (latency guard)
+//--------------------------------------------------------------------+
+// lwIP's httpd cannot be stopped once started, so the server is gated
+// per-request instead: outside AP onboarding, requests are served only while
+// pairing mode is active (explicit pairing window open, or no controller
+// bonded yet) or during a grace session armed by pairing mode and refreshed
+// by served requests -- so an open config page stays alive, and dies ~10 min
+// after the last request once pairing mode ends. Everything else gets a
+// cheap refusal with no page/JSON work, and wifi_net.cpp withdraws the mDNS
+// "<hostname>.local" record while the gate is closed, so in normal play the
+// dongle spends no core0 time serving HTTP (input-latency guard) and is
+// mDNS-invisible on the LAN. Pairing mode is enterable without the web UI:
+// hold PS+Create ~3 s on a connected controller (main.cpp).
+static constexpr uint64_t WEB_SESSION_US = 10ull * 60 * 1000 * 1000; // 10 min
+static uint64_t web_session_until_us = 0;
+
+bool web_api_access_allowed() {
+    const uint64_t now = time_us_64();
+#ifdef ENABLE_WIFI_WOL
+    if (wifi_net_in_ap_mode()) return true;
+#endif
+    if (bt_pairing_mode_active()) {
+        web_session_until_us = now + WEB_SESSION_US;
+        return true;
+    }
+    return now < web_session_until_us;
+}
+
+// A request was actually served while the gate was open: keep the session
+// alive so an active config-page visit doesn't expire mid-edit. (An open
+// tab's status poll counts as activity; closing the tab lets the session
+// lapse.)
+static void web_session_touch() {
+    const uint64_t until = time_us_64() + WEB_SESSION_US;
+    if (until > web_session_until_us) web_session_until_us = until;
+}
 
 //--------------------------------------------------------------------+
 // HTTP content: / (page), /api/config -- via fs_open_custom
@@ -103,6 +142,12 @@ static int json_config(char *out, size_t cap) {
                     "\"pairing_mask\":\"%lX\","
                     "\"pairing_rgb\":\"%02X%02X%02X\","
                     "\"idle_rgb\":\"%02X%02X%02X\","
+                    // Per-state strip animation modes, one digit per
+                    // LED_STATE_* in index order (values are LED_ANIM_*).
+                    "\"led_anim\":\"%u%u%u%u%u%u\","
+                    "\"empty_rgb\":\"%02X%02X%02X\","
+                    "\"lowbatt_rgb\":\"%02X%02X%02X\","
+                    "\"critbatt_rgb\":\"%02X%02X%02X\","
                     "\"disable_player_led_lock\":%u,"
                     "\"disable_lightbar_override\":%u,"
                     "\"lightbar_filter_rgb\":\"%02X%02X%02X\","
@@ -130,6 +175,11 @@ static int json_config(char *out, size_t cap) {
                     (unsigned long) c.pairing_led_mask,
                     c.pairing_rgb[0], c.pairing_rgb[1], c.pairing_rgb[2],
                     c.idle_rgb[0], c.idle_rgb[1], c.idle_rgb[2],
+                    c.led_anim[0], c.led_anim[1], c.led_anim[2],
+                    c.led_anim[3], c.led_anim[4], c.led_anim[5],
+                    c.empty_rgb[0], c.empty_rgb[1], c.empty_rgb[2],
+                    c.lowbatt_rgb[0], c.lowbatt_rgb[1], c.lowbatt_rgb[2],
+                    c.critbatt_rgb[0], c.critbatt_rgb[1], c.critbatt_rgb[2],
                     c.disable_player_led_lock,
                     c.disable_lightbar_override,
                     c.lightbar_filter_rgb[0], c.lightbar_filter_rgb[1],
@@ -275,9 +325,9 @@ static int json_slots(char *out, size_t cap) {
     const char *led_flag = "false";
 #endif
     int w = snprintf(out, cap,
-                     "{\"max\":%u,\"connected\":%d,\"audio_slot\":%u,\"audio_allowed\":%s,\"led\":%s,\"slots\":[",
-                     BT_MAX_SLOTS, bt_connected_count(), tier_audio_slot(),
-                     tier_audio_allowed() ? "true" : "false", led_flag);
+                     "{\"max\":%u,\"connected\":%d,\"usb_exposed\":%u,\"audio_slot\":%u,\"audio_allowed\":%s,\"led\":%s,\"slots\":[",
+                     BT_MAX_SLOTS, bt_connected_count(), usb_exposed_slot_count(),
+                     tier_audio_slot(), tier_audio_allowed() ? "true" : "false", led_flag);
     for (int i = 0; i < BT_MAX_SLOTS && w < (int) cap; i++) {
         BtStatus s;
         bt_get_status((uint8_t) i, &s);
@@ -338,6 +388,15 @@ extern "C" int fs_open_custom(struct fs_file *file, const char *name) {
         }
     }
 #endif
+    if (!web_api_access_allowed()) {
+        // Gate closed (normal play): cheap refusal, no page/JSON work. The
+        // hint tells a user who bookmarked the page how to reopen it.
+        static const char gated[] =
+            "web UI is sleeping. Hold PS+Create ~3s on a connected controller "
+            "(or re-enter pairing mode) to wake it.";
+        return make_file(file, "404 Not Found", "text/plain", gated, sizeof(gated) - 1);
+    }
+    web_session_touch();
     if (strcmp(name, "/") == 0 || strcmp(name, "/index.html") == 0) {
         // Serve the page straight from flash (headers included) -- zero heap.
         memset(file, 0, sizeof(*file));
@@ -350,7 +409,7 @@ extern "C" int fs_open_custom(struct fs_file *file, const char *name) {
     // Shared JSON scratch: make_file() copies the body into its own malloc'd
     // buffer before returning, and httpd serves one custom file at a time, so a
     // single static buffer is safe for both JSON routes (saves BSS -> heap).
-    static char body[768]; // sized for /api/slots at 4 slots
+    static char body[1024]; // sized for /api/config (largest JSON route)
     if (strcmp(name, "/api/config") == 0) {
         const int len = json_config(body, sizeof(body));
         return make_file(file, "200 OK", "application/json", body, len);
@@ -483,7 +542,10 @@ extern "C" int fs_read_custom(struct fs_file *file, char *buffer, int count) {
 // POST can never persist an out-of-range setting.
 //--------------------------------------------------------------------+
 
-#define POST_BUFSIZE 512
+// Must hold the ENTIRE /api/config save body (the page posts every field in
+// one form body; ~550 B worst-case with the LED animation/color fields) --
+// httpd_post_begin hard-rejects anything longer.
+#define POST_BUFSIZE 768
 static char post_buf[POST_BUFSIZE];
 static u16_t post_pos;
 static void *post_conn;
@@ -630,6 +692,31 @@ static void apply_post(char *body) {
                     c.idle_rgb[0] = (uint8_t) (v >> 16);
                     c.idle_rgb[1] = (uint8_t) (v >> 8);
                     c.idle_rgb[2] = (uint8_t) v;
+                }
+            }
+        } else if (strcmp(tok, "empty_rgb") == 0 ||
+                   strcmp(tok, "lowbatt_rgb") == 0 ||
+                   strcmp(tok, "critbatt_rgb") == 0) {
+            if (strlen(eq) == 6) {
+                char *end = nullptr;
+                const uint32_t v = (uint32_t) strtoul(eq, &end, 16);
+                if (end == eq + 6) {
+                    uint8_t *rgb = tok[0] == 'e'   ? c.empty_rgb
+                                   : tok[0] == 'l' ? c.lowbatt_rgb
+                                                   : c.critbatt_rgb;
+                    rgb[0] = (uint8_t) (v >> 16);
+                    rgb[1] = (uint8_t) (v >> 8);
+                    rgb[2] = (uint8_t) v;
+                }
+            }
+        } else if (strcmp(tok, "led_anim") == 0) {
+            // One digit per LED_STATE_* in index order (values LED_ANIM_*;
+            // config_valid() re-defaults anything out of range).
+            if (strlen(eq) == LED_STATE_COUNT) {
+                for (int i = 0; i < LED_STATE_COUNT; i++) {
+                    if (eq[i] >= '0' && eq[i] <= '9') {
+                        c.led_anim[i] = (uint8_t) (eq[i] - '0');
+                    }
                 }
             }
         } else if (strncmp(tok, "slot_rgb", 8) == 0 &&
@@ -934,6 +1021,10 @@ extern "C" err_t httpd_post_begin(void *connection, const char *uri, const char 
     (void) response_uri;
     (void) response_uri_len;
     (void) post_auto_wnd;
+    // Web access gate: refuse everything while closed (AP onboarding and
+    // pairing mode pass; see web_api_access_allowed).
+    if (!web_api_access_allowed()) return ERR_VAL;
+    web_session_touch();
     post_target_t target;
     if (strcmp(uri, "/api/config") == 0) target = POST_CONFIG;
     else if (strcmp(uri, "/api/bonds") == 0) target = POST_BONDS;

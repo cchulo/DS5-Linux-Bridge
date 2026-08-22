@@ -212,6 +212,13 @@ static bt_slot *slot_alloc(const bd_addr_t addr) {
     return nullptr;
 }
 
+// Per-slot output-report sequence counter, owned by main.cpp's 0x31 path.
+// Shared here so 0x32 full-state pushes advance the SAME sequence instead of
+// stamping a fixed 0x10 -- back-to-back 0x32s with an identical seq nibble
+// risk being de-duplicated by the pad (e.g. the join-time full-state +
+// lock-refresh pair, and the periodic lock re-assert).
+extern int reportSeqCounter[BT_MAX_SLOTS];
+
 // Push a slot's full cached output state (report 0x32: lightbar, player
 // LEDs, rumble/FFB) to whichever pad sits there. Used at connect and after a
 // slot swap.
@@ -220,7 +227,8 @@ static void bt_send_full_state(uint8_t slot) {
     if (slots[slot].interrupt_cid == 0) return;
     uint8_t report32[142]{};
     report32[0] = 0x32;
-    report32[1] = 0x10; // reportSeqCounter
+    report32[1] = (uint8_t) (reportSeqCounter[slot] << 4);
+    if (++reportSeqCounter[slot] == 256) reportSeqCounter[slot] = 0;
     report32[2] = 0x10 | 0 << 6 | 1 << 7;
     report32[3] = 0x3f; // 63 bytes
     state_get(slot, report32 + 4, sizeof(SetStateData));
@@ -247,6 +255,23 @@ void bt_player_led_lock_refresh() {
         state_force_player_leds(i);
         bt_send_full_state(i);
     }
+#endif
+}
+
+// Low-rate (1 Hz) re-assert of the player-LED lock while it is active.
+// Needed because there is NO periodic output-report flush anywhere: the
+// join-time re-pin is a single unacknowledged shot that can land during the
+// new pad's connect/pairing LED animation (when a DualSense ignores LED
+// writes), so a lost pin would otherwise stick until the next host write to
+// that pad. bt_player_led_lock_refresh() itself no-ops unless the lock is
+// enabled AND 2+ pads are connected, so this costs nothing in normal play.
+void bt_player_led_lock_tick() {
+#if BT_MAX_SLOTS > 1
+    static uint64_t last_us = 0;
+    const uint64_t now = time_us_64();
+    if (now - last_us < 1000000) return;
+    last_us = now;
+    bt_player_led_lock_refresh();
 #endif
 }
 
@@ -1070,8 +1095,8 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             if (s) {
                 printf("[HCI] Slot %d disconnected\n", slot_index(s));
                 slot_clear(s);
-                // Neutralize the slot's USB input buffer: with always-FULL
-                // enumeration the interface stays visible, and a pad that
+                // Neutralize the slot's USB input buffer: the interface stays
+                // enumerated after a disconnect (no shrink), and a pad that
                 // dropped mid-press (e.g. the PS+Triangle power-off shortcut)
                 // must not leave its last buttons frozen "held" on the host.
                 bridge_reset_slot_input((uint8_t) slot_index(s));
@@ -1087,14 +1112,19 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
 #endif
             }
             if (bt_connected_count() == 0) {
+                // Last controller left: reset the exposed-slot high-water
+                // mark, so the orchestrator re-enumerates back down to a
+                // single gamepad interface (slot 0). This is the ONLY shrink
+                // path -- individual disconnects above leave every enumerated
+                // interface in place, and the next controller to connect
+                // silently takes the lowest vacated seat.
+                usb_notify_all_disconnected();
 #ifdef ENABLE_WAKE_HID
-                // Stay enumerated with the FULL descriptor: the dongle now
-                // presents all gamepad interfaces whenever it is plugged in
-                // (user preference: connects/disconnects must be seamless, no
-                // re-enumeration bounces). Remote wakeup keeps working -- it
-                // only needs the device enumerated and suspended. The MINIMAL
-                // ghost-hiding variant is retained in usb_descriptors.cpp for
-                // a possible future config toggle, but is never requested.
+                // Stay enumerated (FULL, one gamepad interface): remote
+                // wakeup keeps working -- it only needs the device enumerated
+                // and suspended. The MINIMAL ghost-hiding variant is retained
+                // in usb_descriptors.cpp for a possible future config toggle,
+                // but is never requested.
 #else
                 // Without ENABLE_WAKE_HID we hide the USB device whenever no
                 // controller is paired (upstream behavior).
@@ -1194,6 +1224,9 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                     // when the host is awake; the variant swap stays deferred
                     // until the wake lands.
                     wake_on_bt_connect();
+                    // Grow the exposed-slot set if this controller took a
+                    // not-yet-enumerated seat (no-op, no bus bounce, otherwise).
+                    usb_notify_slot_connected(slot);
 #ifdef ENABLE_WAKE_HID
                     usb_request_variant_full();
 #else
@@ -1211,6 +1244,9 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                     // when the host is awake; the variant swap stays deferred
                     // until the wake lands.
                     wake_on_bt_connect();
+                    // Grow the exposed-slot set if this controller took a
+                    // not-yet-enumerated seat (no-op, no bus bounce, otherwise).
+                    usb_notify_slot_connected(slot);
 #ifdef ENABLE_WAKE_HID
                     usb_request_variant_full();
 #else

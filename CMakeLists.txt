@@ -345,13 +345,18 @@ endif()
 # haunted every local pico2_w build until 2026-07-19, which is exactly the
 # confusion the auto stamp exists to prevent.
 # Semver base for this fork. Bump by hand on meaningful milestones.
+# 0.4.0: dynamic exposed-slot enumeration (grow on join, shrink only when the
+#        last pad leaves); web UI gated to pairing mode + 10-min session
+#        (mDNS withdrawn otherwise); LED strip per-state animation/colors
+#        (idle default off, critical keeps blinking); player-LED lock made
+#        reliable (1 Hz re-assert, audio-slot output-report deferral fix).
 # 0.3.0: Wake-on-LAN -- PS button wakes the PC from S4/S5 via magic packet
 #        (S3 keeps USB remote-wakeup); Network tab gains device name, WOL
 #        targets, Find-MAC and Wake-now.
 # 0.2.0: NCM transport removed -- config page is WiFi-only, USB face is pure
 #        DualSense (breaking for NCM-era clients; the Decky plugin should
 #        discover via ds5.local from here on).
-set(DS5_BASE_VERSION "0.3.0")
+set(DS5_BASE_VERSION "0.4.0")
 # Auto version: "<semver>-<build minute UTC>", e.g. 0.1.0-20260720-0142.
 # Minute-sensitive so a flashed image is never ambiguous; the stamped UF2
 # copy below carries the same string in its filename. Configure-time, and

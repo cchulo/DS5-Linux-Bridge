@@ -24,9 +24,13 @@ config page, and OS-specific behavior and troubleshooting.
 - Up to **four DualSense / DualSense Edge controllers simultaneously** on one
   dongle. Each pad appears to the host as its own USB gamepad. Seats are
   assigned in session order (lowest free slot), like a PS5.
-- **Seamless joins and leaves** — every gamepad interface is present from the
-  moment the dongle is plugged in, so controllers connecting or disconnecting
-  never cause a USB re-enumeration (and wake-from-sleep keeps working).
+- **Grow-as-you-go enumeration** — the dongle enumerates with a single
+  gamepad interface and only re-enumerates (one quick USB bounce) when a
+  controller joins a seat the host hasn't seen yet this session. Disconnects
+  never re-enumerate: a vacated seat stays visible and the next controller
+  silently takes the lowest free one (so if player 1 drops, the next pad to
+  connect *is* player 1). When the last controller leaves, the dongle bounces
+  once back down to a single interface.
 - **Feature tiers** — rumble and adaptive triggers always work on every pad.
   Controller audio (speaker, HD haptics, microphone) streams only while
   exactly **one** pad is connected; Bluetooth bandwidth can't carry audio for
@@ -53,17 +57,18 @@ config page, and OS-specific behavior and troubleshooting.
 
 - Optional status LEDs driven from **GP28** (build with
   `-DENABLE_LED_STRIP=ON`), rendered via PIO at a 5% brightness cap.
-- Per-slot indication: **off** = no controller, **solid slot color** =
-  connected, **blinking yellow** = battery at or below 40% (discharging),
-  **blinking red** (faster) = at or below 20%.
-- **Idle breathing** — with no controller connected (and not pairing), the
-  whole strip slowly breathes a configurable color (default blue): the
-  adapter is on and waiting for a pad.
+- Per-slot indication (colors **and** animation — solid, blink, pulse, or
+  off — configurable per state in the UI): **empty seat** = off/black by
+  default, **connected** = solid slot color, **battery ≤ 40%** (discharging)
+  = yellow, **battery ≤ 20%** = red, blinking by default (the one state that
+  still blinks out of the box).
+- **Idle** — with no controller connected (and not pairing), the strip is
+  **off by default**; give the state a color and an animation (e.g. pulse
+  blue) to get a "powered and waiting" display.
 - **Fixed status codes** (whole strip, not configurable — see the
   [user guide](docs/USER_GUIDE.md#led-strip-status-codes)): **solid
   orange** = flash mode (UF2 bootloader), **solid red** = firmware
-  crashed / boot-looping. The battery-warning yellow/red blinks are fixed
-  colors too.
+  crashed / boot-looping.
 - **Configurable layout** — set how many LEDs the strip has (default 8, up to
   32) and click, per slot, exactly which LEDs light up. Any physical
   arrangement works: a line, a ring, a square, several LEDs per slot.
@@ -76,6 +81,13 @@ config page, and OS-specific behavior and troubleshooting.
 
 ### Web UI
 
+- **Sleeps during normal play** (latency guard): the page and the
+  `<hostname>.local` mDNS record are only served while the dongle is in
+  **pairing mode** (hold **PS + Create** ~3 s on a connected pad, or use a
+  fresh dongle with nothing bonded yet) and for a ~10-minute grace session
+  after — refreshed while the page is actually in use. Outside that window
+  HTTP requests get a cheap refusal and the dongle stays mDNS-silent, so the
+  WiFi stack does no per-request work on the input hot path.
 - Live **status card**: per-slot connection state, model, battery percentage
   (colored at the same 40%/20% thresholds as the strip), and which features
   are active on each pad at the current tier.

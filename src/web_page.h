@@ -152,8 +152,9 @@ footer .kofi:hover{text-decoration:none;opacity:.9}
   <label class="lbl">Slot colors</label>
   <div class="ledrow" id="slot_colors" style="margin-top:.2rem"></div>
   <div class="hint">Lightbar and strip LED color per controller slot (default
-  blue, like player 1 on a PS5). Battery warnings on the strip still blink
-  yellow/red, and games can still override the lightbar while they run.</div>
+  blue, like player 1 on a PS5). Battery warnings can still override the strip
+  color (see Animations &amp; colors below when a strip is enabled), and games
+  can still override the lightbar while they run.</div>
 </div>
 
 <div class="field">
@@ -202,14 +203,56 @@ footer .kofi:hover{text-decoration:none;opacity:.9}
   <div id="led_map" style="margin-top:.6rem"></div>
   <div class="hint">Click the LEDs each slot should light — any shape works
   (line, ring, square…). LEDs are numbered from the first one on the strip.
-  Unassigned LEDs stay dark. The <b>Pairing</b> row blinks (in its chosen
-  color) while the dongle is searching for a controller.</div>
-  <div style="display:flex;align-items:center;gap:.6rem;margin-top:.5rem">
-    <span class="hint" style="margin:0">Waiting color</span>
-    <input type="color" id="idle_rgb" value="#0000ff">
+  Unassigned LEDs stay dark. The <b>Pairing</b> row lights up (in its chosen
+  color and animation) while the dongle is searching for a controller.</div>
+  <label class="lbl" style="margin-top:.8rem">Animations &amp; colors</label>
+  <div class="ledrow ctl">
+    <span class="ledlbl">Waiting</span>
+    <span class="lctl">
+      <select id="anim0"><option value="1">Solid</option><option value="2">Blink</option><option value="3">Pulse</option><option value="4">Off</option></select>
+      <input type="color" id="idle_rgb" value="#0000ff">
+    </span>
   </div>
-  <div class="hint">With no controller connected (and not pairing), the whole
-  strip slowly "breathes" this color to show the adapter is on and waiting.</div>
+  <div class="ledrow ctl">
+    <span class="ledlbl">Connected</span>
+    <span class="lctl">
+      <select id="anim1"><option value="1">Solid</option><option value="2">Blink</option><option value="3">Pulse</option><option value="4">Off</option></select>
+      <span class="hint" style="margin:0">uses the slot colors above</span>
+    </span>
+  </div>
+  <div class="ledrow ctl">
+    <span class="ledlbl">Empty slot</span>
+    <span class="lctl">
+      <select id="anim2"><option value="1">Solid</option><option value="2">Blink</option><option value="3">Pulse</option><option value="4">Off</option></select>
+      <input type="color" id="empty_rgb" value="#000000">
+    </span>
+  </div>
+  <div class="ledrow ctl">
+    <span class="ledlbl">Pairing</span>
+    <span class="lctl">
+      <select id="anim3"><option value="1">Solid</option><option value="2">Blink</option><option value="3">Pulse</option><option value="4">Off</option></select>
+      <span class="hint" style="margin:0">color set in the Pairing row above</span>
+    </span>
+  </div>
+  <div class="ledrow ctl">
+    <span class="ledlbl">Low battery</span>
+    <span class="lctl">
+      <select id="anim4"><option value="1">Solid</option><option value="2">Blink</option><option value="3">Pulse</option><option value="4">Off</option></select>
+      <input type="color" id="lowbatt_rgb" value="#ffc800">
+    </span>
+  </div>
+  <div class="ledrow ctl">
+    <span class="ledlbl">Critical battery</span>
+    <span class="lctl">
+      <select id="anim5"><option value="1">Solid</option><option value="2">Blink</option><option value="3">Pulse</option><option value="4">Off</option></select>
+      <input type="color" id="critbatt_rgb" value="#ff0000">
+    </span>
+  </div>
+  <div class="hint"><b>Waiting</b> covers the whole strip while no controller
+  is connected (default off — the strip stays dark). <b>Empty slot</b> colors
+  a vacant seat while other controllers are connected (default black = dark).
+  Battery warnings apply while discharging; a charging pad shows its slot
+  color. Defaults: everything solid, critical battery blinks, waiting off.</div>
 </div>
 </div>
 
@@ -342,7 +385,7 @@ function bindRange(id,out){const el=$(id);const fn=()=>$(out).textContent=el.val
 const upd=[bindRange('audio_buffer_length','ab_val'),bindRange('inactive_time','it_val')];
 
 function markDirty(){$('save').disabled=false;setStatus('unsaved changes','dirty')}
-['controller_mode','polling_rate_mode','disable_inactive_disconnect','disable_pico_led','player_led_lock','lightbar_override','lightbar_filter_rgb','idle_rgb']
+['controller_mode','polling_rate_mode','disable_inactive_disconnect','disable_pico_led','player_led_lock','lightbar_override','lightbar_filter_rgb','idle_rgb','empty_rgb','lowbatt_rgb','critbatt_rgb','anim0','anim1','anim2','anim3','anim4','anim5']
   .forEach(id=>$(id).onchange=markDirty);
 ['hostname','wol_mac1','wol_mac2'].forEach(id=>$(id).oninput=markDirty);
 
@@ -398,6 +441,10 @@ async function load(){
     pairingMask=parseInt(c.pairing_mask||'55',16)>>>0;
     if(c.pairing_rgb)pairingRgb='#'+c.pairing_rgb.toLowerCase();
     if(c.idle_rgb)$('idle_rgb').value='#'+c.idle_rgb.toLowerCase();
+    if(c.empty_rgb)$('empty_rgb').value='#'+c.empty_rgb.toLowerCase();
+    if(c.lowbatt_rgb)$('lowbatt_rgb').value='#'+c.lowbatt_rgb.toLowerCase();
+    if(c.critbatt_rgb)$('critbatt_rgb').value='#'+c.critbatt_rgb.toLowerCase();
+    if(c.led_anim)for(let i=0;i<6;i++){const el=$('anim'+i);if(el)el.value=c.led_anim[i]}
     buildLedMap();
     upd.forEach(f=>f());
     $('save').disabled=true;setStatus('');
@@ -429,6 +476,11 @@ async function save(){
   parts.push('pairing_mask='+(pairingMask>>>0).toString(16));
   parts.push('pairing_rgb='+pairingRgb.slice(1));
   parts.push('idle_rgb='+$('idle_rgb').value.slice(1));
+  parts.push('empty_rgb='+$('empty_rgb').value.slice(1));
+  parts.push('lowbatt_rgb='+$('lowbatt_rgb').value.slice(1));
+  parts.push('critbatt_rgb='+$('critbatt_rgb').value.slice(1));
+  let anim='';for(let i=0;i<6;i++)anim+=$('anim'+i).value;
+  parts.push('led_anim='+anim);
   const body=parts.join('&');
   setStatus('saving…','dirty');
   try{

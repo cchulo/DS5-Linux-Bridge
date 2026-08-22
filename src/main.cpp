@@ -152,7 +152,11 @@ static void state_push_slot_to_bt(uint8_t slot) {
 }
 
 void state_push_to_bt() {
-  if (spk_active) {
+  // Skip only when the ~93 Hz audio frame path will actually carry the state:
+  // with 2+ pads connected the tier policy stops audio frames entirely
+  // (tier_audio_allowed() false), so deferring there would drop the push
+  // forever, not piggyback it.
+  if (spk_active && tier_audio_allowed()) {
     return;
   }
   state_push_slot_to_bt(tier_audio_slot());
@@ -449,7 +453,13 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id,
       // (Ported from upstream awalol/DS5Dongle 07ecbb3, issue #182.)
       bool send_now = ((buffer[1] >> 1) & 1) ||  // UseRumbleNotHaptics
                       ((buffer[39] >> 3) & 1);   // UseRumbleNotHaptics2
-      if (!send_now && slot == tier_audio_slot() && spk_active) {
+      // Only defer when the audio frame path is actually alive: with 2+ pads
+      // connected the tier policy stops audio frames (tier_audio_allowed()
+      // false) even while the host keeps the speaker interface open, and a
+      // deferred report would never be transmitted at all -- silently
+      // dropping lightbar/player-LED/FFB writes for the audio slot.
+      if (!send_now && slot == tier_audio_slot() && spk_active &&
+          tier_audio_allowed()) {
         break;
       }
       state_push_slot_to_bt(slot);
@@ -673,14 +683,15 @@ int main() {
     watchdog_update();
     cyw43_arch_poll();
     bt_connection_watchdog_tick();
+    bt_player_led_lock_tick();
     bt_blacklist_persist_if_dirty();
     bt_feature_snapshot_persist_if_dirty();
     bt_pump();
     tud_task();
     wake_task();
-#ifdef ENABLE_WAKE_HID
+    // Swap orchestrator: exposed-slot growth/reset (all builds) + variant
+    // swaps and the one-shot rebind (wake builds).
     usb_variant_task();
-#endif
     // WiFi STA link supervision + lwIP timers + mDNS registration + deferred
     // reboots (no-op with ENABLE_WIFI_WOL off). RX is pumped by
     // cyw43_arch_poll(). Cheap; not in the audio hot path.

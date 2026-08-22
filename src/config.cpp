@@ -93,6 +93,11 @@ static_assert(offsetof(Config_body, wifi_ssid) == 318);
 static_assert(offsetof(Config_body, wifi_psk) == 351);
 static_assert(offsetof(Config_body, wol_target_mac) == 415);
 static_assert(offsetof(Config_body, wol_target_mac2) == 421);
+// LED strip per-state animation + colors.
+static_assert(offsetof(Config_body, led_anim) == 427);
+static_assert(offsetof(Config_body, empty_rgb) == 433);
+static_assert(offsetof(Config_body, lowbatt_rgb) == 436);
+static_assert(offsetof(Config_body, critbatt_rgb) == 439);
 static_assert(sizeof(Config_body) <= 448); // keep well inside the 512 B store
 
 // CRC over the first `len` bytes of the body. `len` is the stored size, so an
@@ -224,6 +229,37 @@ void config_valid() {
   if (body->idle_rgb[0] == 0 && body->idle_rgb[1] == 0 &&
       body->idle_rgb[2] == 0) {
     body->idle_rgb[2] = 0xff;
+  }
+  // LED strip per-state animation modes: LED_ANIM_UNSET (fresh/migrated
+  // config) resolves to the per-state default -- solid everywhere except
+  // critical battery (keeps its "about to die" blink) and idle (dark by
+  // default). Out-of-range values also re-default.
+  {
+    static const uint8_t anim_defaults[LED_STATE_COUNT] = {
+        LED_ANIM_OFF,   // idle
+        LED_ANIM_SOLID, // connected
+        LED_ANIM_SOLID, // empty seat (color defaults to black anyway)
+        LED_ANIM_SOLID, // pairing
+        LED_ANIM_SOLID, // low battery
+        LED_ANIM_BLINK, // critical battery
+    };
+    for (int i = 0; i < LED_STATE_COUNT; i++) {
+      if (body->led_anim[i] == LED_ANIM_UNSET || body->led_anim[i] > LED_ANIM_OFF) {
+        body->led_anim[i] = anim_defaults[i];
+      }
+    }
+  }
+  // Battery-warning colors: all-zero is "unset" (an invisible warning is
+  // never a meaningful choice) -> yellow / red. empty_rgb needs no check:
+  // black (dark empty seat) IS the intended out-of-box value.
+  if (body->lowbatt_rgb[0] == 0 && body->lowbatt_rgb[1] == 0 &&
+      body->lowbatt_rgb[2] == 0) {
+    body->lowbatt_rgb[0] = 0xff;
+    body->lowbatt_rgb[1] = 0xc8;
+  }
+  if (body->critbatt_rgb[0] == 0 && body->critbatt_rgb[1] == 0 &&
+      body->critbatt_rgb[2] == 0) {
+    body->critbatt_rgb[0] = 0xff;
   }
   // lightbar_filter_rgb needs no check: every value is valid, and the all-zero
   // default (black) is itself the intended out-of-box filter color.

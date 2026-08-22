@@ -116,6 +116,11 @@ void bt_slot_colors_refresh();
 // single-slot builds, with <2 pads connected, or with the lock disabled.
 void bt_player_led_lock_refresh();
 
+// 1 Hz re-assert of the player-LED lock (there is no periodic output-report
+// flush otherwise, and the join-time pin is a single unacknowledged shot).
+// Call from main loop; no-op unless the lock is active with 2+ pads.
+void bt_player_led_lock_tick();
+
 // Tick connection watchdogs (pre-ACL attempt + per-slot setup). Call from main loop.
 // Also drives the pairing-mode LED blink (see bt_pairing_led_active).
 void bt_connection_watchdog_tick();

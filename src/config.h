@@ -18,6 +18,23 @@
 // plenty for rings/squares while keeping the render loop cheap.
 #define LED_STRIP_MAX_PIXELS 32
 
+// LED strip states with a configurable animation (indexes into led_anim[])
+// and the animation modes themselves. Plain #defines so the header stays
+// usable from C and C++ alike.
+#define LED_STATE_IDLE     0 // whole strip; no pad connected, not pairing
+#define LED_STATE_CONN     1 // a connected seat (color: slot_rgb[slot])
+#define LED_STATE_EMPTY    2 // an empty seat while other pads are connected
+#define LED_STATE_PAIRING  3 // pairing-mode overlay (color: pairing_rgb)
+#define LED_STATE_LOWBATT  4 // <= 40% and discharging
+#define LED_STATE_CRITBATT 5 // <= 20% and discharging
+#define LED_STATE_COUNT    6
+
+#define LED_ANIM_UNSET 0 // fresh/migrated config; config_valid() installs the default
+#define LED_ANIM_SOLID 1
+#define LED_ANIM_BLINK 2
+#define LED_ANIM_PULSE 3 // raised-cosine breathe
+#define LED_ANIM_OFF   4
+
 // mDNS / network hostname (the "<name>.local" the dongle advertises). User-set
 // so two dongles on one LAN don't both claim ds5.local. Max 10 chars + NUL;
 // validated to a DNS label (lowercase a-z, 0-9, hyphen; no leading/trailing
@@ -162,6 +179,19 @@ struct __attribute__((packed)) Config_body {
     // configured (non-zero) target (wifi_wol_send_all()).
     uint8_t wol_target_mac[6];
     uint8_t wol_target_mac2[6];
+    // --- LED strip per-state animation + colors (see ledstrip.cpp) ---
+    // Animation mode per strip state, indexed by LED_STATE_*. Stored value is
+    // LED_ANIM_*; 0 (LED_ANIM_UNSET, fresh/migrated config) resolves to the
+    // per-state default in config_valid(): solid everywhere except critical
+    // battery (blink) and idle (off).
+    uint8_t led_anim[LED_STATE_COUNT];
+    // Color of an empty seat while other pads are connected (the all-empty
+    // strip is LED_STATE_IDLE's). Unlike the other colors, all-zero (black =
+    // dark seat) IS the meaningful default, so no unset semantics.
+    uint8_t empty_rgb[3];
+    // Battery-warning colors. All-zero = unset -> yellow / red.
+    uint8_t lowbatt_rgb[3];
+    uint8_t critbatt_rgb[3];
 };
 
 struct __attribute__((packed)) Config {

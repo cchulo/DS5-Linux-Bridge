@@ -49,19 +49,20 @@ constexpr uint64_t FRAME_INTERVAL_US = 33'000;
 constexpr uint16_t BRIGHTNESS_CAP = 13;
 constexpr float    GAMMA          = 2.2f;
 
-// Connected color comes from the per-slot config (slot_rgb, default blue
-// #0000FF), matching the pad's lightbar. Warning blinks stay fixed.
-constexpr uint8_t YELLOW[3] = {255, 200, 0};
-constexpr uint8_t RED[3]    = {255, 0, 0};
+// Every state's color AND animation (solid/blink/pulse/off) now comes from
+// config: slot_rgb per seat, empty_rgb / lowbatt_rgb / critbatt_rgb /
+// pairing_rgb / idle_rgb, and led_anim[LED_STATE_*] (defaults resolved in
+// config_valid(): all solid except critical battery = blink, idle = off).
+// Only the cadences stay fixed:
 
-// Blink cadence (full period; 50% duty). Red blinks faster: it's the
-// "controller is about to die" signal.
-constexpr uint32_t BLINK_YELLOW_MS = 1000;
-constexpr uint32_t BLINK_RED_MS    = 400;
+// Blink cadence (full period; 50% duty). Critical blinks faster: it's the
+// "controller is about to die" signal. Pairing keeps its ~2 Hz identity.
+constexpr uint32_t BLINK_MS         = 1000;
+constexpr uint32_t BLINK_CRIT_MS    = 400;
+constexpr uint32_t BLINK_PAIRING_MS = 500;
 
-// Idle "waiting for a controller" breathing: whole strip fades the
-// configured idle_rgb (default blue) in and out, like a DS5 searching for
-// its console. Full in+out cycle length:
+// Pulse ("breathe") full in+out cycle length, like a DS5 searching for its
+// console.
 constexpr uint32_t BREATHE_MS = 3000;
 
 // Deliberately early warnings: charging only from 10% is hard on the cell,
@@ -109,6 +110,57 @@ inline uint8_t shape(uint8_t v) {
 
 inline bool blink_on(uint32_t ms, uint32_t period) {
     return (ms % period) < period / 2;
+}
+
+// Animation envelope for this frame: 1 = full color, 0 = dark, in-between =
+// pulse fade. `epoch_ms` anchors the pulse phase (pass `ms` for free-running).
+inline float anim_lvl(uint8_t anim, uint32_t ms, uint32_t blink_period,
+                      uint32_t epoch_ms = 0) {
+    switch (anim) {
+        case LED_ANIM_BLINK:
+            return blink_on(ms, blink_period) ? 1.0f : 0.0f;
+        case LED_ANIM_PULSE: {
+            // Raised-cosine fade, scaled pre-gamma so the ramp looks even.
+            constexpr float TWO_PI = 6.2831853f;
+            return 0.5f - 0.5f * cosf((float) ((ms - epoch_ms) % BREATHE_MS) *
+                                      (TWO_PI / (float) BREATHE_MS));
+        }
+        case LED_ANIM_OFF:
+            return 0.0f;
+        default: // LED_ANIM_SOLID
+            return 1.0f;
+    }
+}
+
+// paint_mask with the color scaled by an animation level. lvl 0 skips the
+// paint entirely (underlying pixels show through, same as before).
+inline void paint_mask_lvl(uint8_t frame[][3], uint32_t mask, int count,
+                           const uint8_t *color, float lvl) {
+    if (lvl <= 0.0f) return;
+    const uint8_t scaled[3] = {
+        (uint8_t) ((float) color[0] * lvl + 0.5f),
+        (uint8_t) ((float) color[1] * lvl + 0.5f),
+        (uint8_t) ((float) color[2] * lvl + 0.5f),
+    };
+    paint_mask(frame, mask, count, scaled);
+}
+
+// Paint one seat according to a configured state (color + animation). Used
+// by both live status and the web-UI simulation overlay, so previews always
+// match production exactly.
+inline void paint_seat_state(uint8_t frame[][3], uint32_t mask, int count,
+                             uint32_t ms, int state, uint8_t slot) {
+    const Config_body &cfg = get_config();
+    const uint8_t *color = cfg.slot_rgb[slot];
+    uint32_t period = BLINK_MS;
+    switch (state) {
+        case LED_STATE_EMPTY:    color = cfg.empty_rgb; break;
+        case LED_STATE_LOWBATT:  color = cfg.lowbatt_rgb; break;
+        case LED_STATE_CRITBATT: color = cfg.critbatt_rgb; period = BLINK_CRIT_MS; break;
+        default: break; // LED_STATE_CONN: slot color
+    }
+    paint_mask_lvl(frame, mask, count, color,
+                   anim_lvl(cfg.led_anim[state], ms, period));
 }
 } // namespace
 
@@ -315,78 +367,71 @@ void ledstrip_tick() {
                 idle_now = !st.connected;
             }
         }
-        const bool breathe_now = idle_now || (sim_any && sim_idle);
-        // Phase-anchor the breathe to the moment it becomes active, so it
+        const bool idle_show = idle_now || (sim_any && sim_idle);
+        // Phase-anchor a pulsing idle to the moment it becomes active, so it
         // always starts from dark and fades in — free-running uptime phase
         // would make the strip jump to whatever brightness the cycle
         // happened to be at (an abrupt solid-color pop).
-        static uint32_t breathe_epoch_ms = 0;
-        static bool breathe_prev = false;
-        if (breathe_now && !breathe_prev) breathe_epoch_ms = ms;
-        breathe_prev = breathe_now;
-        if (breathe_now) {
-            // Raised-cosine fade, scaled pre-gamma so the ramp looks even.
-            constexpr float TWO_PI = 6.2831853f;
-            const float lvl =
-                0.5f - 0.5f * cosf((float) ((ms - breathe_epoch_ms) % BREATHE_MS) *
-                                   (TWO_PI / (float) BREATHE_MS));
-            const uint8_t *c = get_config().idle_rgb;
-            for (int p = 0; p < count; p++) {
-                frame[p][0] = (uint8_t) ((float) c[0] * lvl + 0.5f);
-                frame[p][1] = (uint8_t) ((float) c[1] * lvl + 0.5f);
-                frame[p][2] = (uint8_t) ((float) c[2] * lvl + 0.5f);
-            }
+        static uint32_t idle_epoch_ms = 0;
+        static bool idle_prev = false;
+        if (idle_show && !idle_prev) idle_epoch_ms = ms;
+        idle_prev = idle_show;
+        if (idle_show) {
+            // Whole strip in the configured idle color + animation (default:
+            // off -- the strip stays dark until a controller connects).
+            const float lvl = anim_lvl(get_config().led_anim[LED_STATE_IDLE],
+                                       ms, BLINK_MS, idle_epoch_ms);
+            const uint32_t all = (count >= 32) ? 0xFFFFFFFFu : ((1u << count) - 1);
+            paint_mask_lvl(frame, all, count, get_config().idle_rgb, lvl);
         }
 
         for (uint8_t slot = 0; slot < BT_MAX_SLOTS; slot++) {
             const uint32_t mask = get_config().slot_led_mask[slot];
 
             // Simulation overlay: preview this slot's state (real colors and
-            // cadence) while other slots keep live status. 3 = connected
-            // (steady slot color), 1/2 = low/critical battery blink.
+            // animation, via the shared paint_seat_state) while other slots
+            // keep live status. 3 = connected, 1/2 = low/critical battery.
             if (sim_any && sim_level[slot] != 0) {
-                if (sim_level[slot] == 3) {
-                    paint_mask(frame, mask, count, get_config().slot_rgb[slot]);
-                } else {
-                    const bool crit = sim_level[slot] == 2;
-                    if (blink_on(ms, crit ? BLINK_RED_MS : BLINK_YELLOW_MS)) {
-                        paint_mask(frame, mask, count, crit ? RED : YELLOW);
-                    }
-                }
+                const int st = sim_level[slot] == 3   ? LED_STATE_CONN
+                               : sim_level[slot] == 2 ? LED_STATE_CRITBATT
+                                                      : LED_STATE_LOWBATT;
+                paint_seat_state(frame, mask, count, ms, st, slot);
                 continue;
             }
 
             BtStatus st;
             bt_get_status(slot, &st);
-            if (!st.connected) continue; // off
-
-            // Steady color = the slot's configured color (same as its lightbar).
-            const uint8_t *color = get_config().slot_rgb[slot];
-            bool on = true;
-            // Low-battery blinks only while discharging: a charging pad is
-            // recovering, not dying, so it shows its steady slot color.
-            if (st.battery_valid && !st.charging) {
-                if (st.battery_pct <= LOW_BATT_RED_PCT) {
-                    color = RED;
-                    on = blink_on(ms, BLINK_RED_MS);
-                } else if (st.battery_pct <= LOW_BATT_YELLOW_PCT) {
-                    color = YELLOW;
-                    on = blink_on(ms, BLINK_YELLOW_MS);
+            if (!st.connected) {
+                // Empty seat. Only rendered while something else is on the
+                // strip (idle owns the all-empty case); default color is
+                // black, so out of the box this stays dark as before.
+                if (!idle_now) {
+                    paint_seat_state(frame, mask, count, ms, LED_STATE_EMPTY, slot);
                 }
+                continue;
             }
-            if (!on) continue;
 
-            paint_mask(frame, mask, count, color);
+            // Connected: the slot's configured color (same as its lightbar),
+            // overridden by the battery warnings while discharging: a
+            // charging pad is recovering, not dying, so it shows its steady
+            // slot color.
+            int state = LED_STATE_CONN;
+            if (st.battery_valid && !st.charging) {
+                if (st.battery_pct <= LOW_BATT_RED_PCT) state = LED_STATE_CRITBATT;
+                else if (st.battery_pct <= LOW_BATT_YELLOW_PCT) state = LED_STATE_LOWBATT;
+            }
+            paint_seat_state(frame, mask, count, ms, state, slot);
         }
 
-        // Pairing-mode overlay: blink the configured pixels in the
-        // configured color (default white) while the dongle is searching
-        // for a controller (~2 Hz, like the onboard LED's pairing blink;
-        // painted last so it wins shared pixels). Independent of
+        // Pairing-mode overlay: the configured pixels in the configured color
+        // (default white, solid) while the dongle is searching for a
+        // controller; painted last so it wins shared pixels. Independent of
         // disable_pico_led -- that switch only covers the onboard LED.
-        if (pairing_now && blink_on(ms, 500)) {
-            paint_mask(frame, get_config().pairing_led_mask, count,
-                       get_config().pairing_rgb);
+        if (pairing_now) {
+            paint_mask_lvl(frame, get_config().pairing_led_mask, count,
+                           get_config().pairing_rgb,
+                           anim_lvl(get_config().led_anim[LED_STATE_PAIRING],
+                                    ms, BLINK_PAIRING_MS));
         }
     }
 

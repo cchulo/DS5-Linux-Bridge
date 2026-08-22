@@ -4,15 +4,19 @@
 // Strip length (led_count, default 8, max LED_STRIP_MAX_PIXELS) and the
 // pixels each slot lights (slot_led_mask bitmasks) are user-configured from
 // the web UI, so any physical layout works (line, ring, square...). The
-// default maps slot k to pixel 2k+1 with dark spacers between. Per slot:
-//   off             = no controller connected
-//   solid slot color= connected (config slot_rgb; default blue #0000FF,
-//                     always matches the pad's lightbar)
-//   blinking yellow = battery <= 40% (discharging)
-//   blinking red    = battery <= 20% (discharging; faster blink)
-// With NO controllers connected (and pairing mode off), the whole strip
-// "breathes" the configured idle color (idle_rgb, default blue) — the
-// dongle is powered and waiting for a pad.
+// default maps slot k to pixel 2k+1 with dark spacers between.
+//
+// Every state's color and animation (solid / blink / pulse / off; config
+// led_anim[LED_STATE_*]) is user-configured. Defaults:
+//   empty seat       = off (empty_rgb black; only rendered while other pads
+//                      are connected — the all-empty strip is the idle state)
+//   connected        = solid slot color (slot_rgb; default blue #0000FF,
+//                      always matches the pad's lightbar)
+//   battery <= 40%   = solid yellow (lowbatt_rgb; discharging only)
+//   battery <= 20%   = blinking red (critbatt_rgb; discharging only)
+//   pairing overlay  = solid white (pairing_rgb, pairing_led_mask)
+//   idle (no pads,   = off by default (idle_rgb, whole strip; set an
+//    not pairing)      animation to get the old "breathing blue" back)
 // Global brightness is capped at 5%.
 //
 // Rendered from the main loop at ~30 Hz via a PIO state machine (claimed

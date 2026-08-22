@@ -33,21 +33,6 @@ uint8_t usb_kbd_hid_instance(void);
 void usb_request_variant_full(void);
 void usb_request_variant_minimal(void);
 
-// One-shot bus bounce keeping the current variant (see usb_descriptors.cpp;
-// used once ever, after the first feature-snapshot capture).
-void usb_request_rebind(void);
-
-// Drive variant-swap state machine. Call from main loop alongside
-// wake_task() / btstack hci_run().
-void usb_variant_task(void);
-
-// True while a variant swap is in flight (between tud_disconnect() and
-// the post-tud_connect() settle). wake.cpp uses this to ignore the
-// tud_mount_cb / tud_resume_cb that fire as a consequence of our own
-// re-enumeration — otherwise the wake FSM treats them as a host wake-up
-// event and starts mashing F15 into the host (-> stray "fic" key spam).
-bool usb_variant_swap_in_progress(void);
-
 // Suspend-state plumbing. wake.cpp owns the authoritative suspended
 // state; usb_variant_task queries this before starting/continuing a
 // swap so we don't yank the bus during S3/S5.
@@ -56,6 +41,39 @@ void usb_set_host_suspended(bool suspended);
 
 #include <stdint.h>
 #include "slots.h"
+
+// --- Dynamic exposed-slot enumeration (all builds) ---
+// The gamepad interfaces are enumerated lazily: the dongle presents ONE
+// gamepad interface (slot 0) until a controller connects into a seat that
+// isn't exposed yet, then re-enumerates with the descriptor grown to the new
+// concurrent-controller high-water mark. Individual disconnects never shrink
+// the exposed set (a vacated seat stays enumerated and the next controller
+// takes it with no bus disruption); only the LAST controller leaving resets
+// the exposure back to a single slot.
+
+// A controller connected into `slot`; grow the exposure to cover it.
+// No-op (no bus bounce) when the slot is already exposed.
+void usb_notify_slot_connected(uint8_t slot);
+// The last controller disconnected; reset exposure to slot 0 only.
+void usb_notify_all_disconnected(void);
+// Slots in the currently live (active) config descriptor.
+uint8_t usb_exposed_slot_count(void);
+
+// One-shot bus bounce keeping the current descriptor shape (see
+// usb_descriptors.cpp; used once ever, after the first feature-snapshot
+// capture).
+void usb_request_rebind(void);
+
+// Drive the swap state machine (variant, exposure growth/reset, rebind).
+// Call from main loop alongside wake_task() / btstack hci_run().
+void usb_variant_task(void);
+
+// True while a swap is in flight (between tud_disconnect() and the
+// post-tud_connect() settle). wake.cpp uses this to ignore the
+// tud_mount_cb / tud_resume_cb that fire as a consequence of our own
+// re-enumeration — otherwise the wake FSM treats them as a host wake-up
+// event and starts mashing F15 into the host (-> stray "fic" key spam).
+bool usb_variant_swap_in_progress(void);
 
 // Slot <-> TinyUSB HID instance mapping. FULL parse order with the wake
 // keyboard: slot 0 gamepad = instance 0, keyboard = instance 1, then the

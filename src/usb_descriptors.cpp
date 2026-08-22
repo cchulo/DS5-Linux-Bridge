@@ -54,13 +54,12 @@ enum {
     // the base set, so every base interface keeps its upstream number: NCM
     // keeps its network-adapter identity, the wake keyboard stays put, and
     // slot 0 remains the real-DualSense interface 3. Slot k (k >= 1) is
-    // interface ITF_NUM_BASE_TOTAL + k - 1. FULL always exposes every slot
-    // (empty ones report neutral input): USB cannot add interfaces without a
-    // re-enumeration bounce, so joining/leaving controllers stay seamless and
-    // the bus only bounces at first-connect / last-disconnect, exactly like
-    // the upstream MINIMAL<->FULL swap. (The tail-append layout would also
-    // support truncating to an exposed-slot count, if a hide-empty-slots
-    // policy is ever wanted again.)
+    // interface ITF_NUM_BASE_TOTAL + k - 1. The tail-append layout lets the
+    // config descriptor be TRUNCATED to the exposed-slot count at fetch time
+    // without renumbering anything: the dongle enumerates with slot 0 only
+    // and re-enumerates to append interfaces as the concurrent-controller
+    // high-water mark grows (see the exposed-slot orchestrator below).
+    // Exposed-but-empty slots report neutral input.
     ITF_NUM_TOTAL = ITF_NUM_BASE_TOTAL + (MULTI_SLOT_COUNT - 1),
 
     // The audio function uses an IAD; the device-class triple must be the
@@ -511,11 +510,10 @@ typedef enum {
     DESC_VARIANT_MINIMAL = 0, // kbd only
     DESC_VARIANT_FULL,        // audio + gamepad + kbd
 } desc_variant_t;
-// The dongle now boots and stays in FULL: every gamepad interface is present
-// whenever it is plugged in, so controllers join and leave with zero USB
-// disruption (user preference over idle ghost-device hiding). MINIMAL and the
-// swap orchestrator are retained for a possible future config toggle; nothing
-// requests MINIMAL anymore.
+// The dongle boots and stays in FULL; MINIMAL is retained for a possible
+// future config toggle but nothing requests it anymore. How many gamepad
+// interfaces FULL carries is dynamic (the exposed-slot high-water mark) --
+// see the exposed-slot orchestrator below.
 static volatile desc_variant_t active_variant = DESC_VARIANT_FULL;
 
 void usb_set_descriptor_variant_full(void)    { active_variant = DESC_VARIANT_FULL; }
@@ -527,20 +525,30 @@ bool usb_descriptor_variant_is_full(void)     { return active_variant == DESC_VA
 // instance 0 so the kbd stays instance 1. Stable across variant swaps -- this
 // is what makes the "rogue keyboard on wake" structurally impossible.
 uint8_t usb_kbd_hid_instance(void) { return 1; }
+#endif // ENABLE_WAKE_HID
 
 //--------------------------------------------------------------------+
-// Variant swap orchestrator
+// Exposed-slot policy + swap orchestrator (all builds)
 //--------------------------------------------------------------------+
-// State machine that drives a USB re-enumeration when the desired
-// descriptor variant differs from the active one. Runs from the main
-// loop via usb_variant_task().
+// State machine that drives a USB re-enumeration whenever the desired
+// descriptor shape differs from the active one: the exposed-slot count,
+// the (wake-build) MINIMAL<->FULL variant, or a one-shot rebind. Runs
+// from the main loop via usb_variant_task().
+//
+// Exposed-slot policy: the dongle enumerates with ONE gamepad interface
+// (slot 0). When a controller connects into a seat that isn't exposed
+// yet, the descriptor grows to the new high-water mark and the bus
+// bounces once. Individual disconnects never shrink the set -- a vacated
+// seat stays enumerated and the next controller takes it silently
+// (lowest-free-slot assignment in bt.cpp). Only the LAST controller
+// leaving resets the exposure back to a single slot.
 //
 // Sequence:
-//   IDLE     — desired == active, nothing to do.
+//   IDLE     — desired shape == active shape, nothing to do.
 //   DISCONNECTING — called tud_disconnect(); wait SETTLE_US so the host
 //                   sees the disconnect cleanly before we present a
 //                   different descriptor.
-//   CONNECTING    — flipped active_variant, called tud_connect(); wait
+//   CONNECTING    — committed the new shape, called tud_connect(); wait
 //                   for host re-enumeration to settle, then back to IDLE.
 //
 // Refuses to start or continue a swap while the host is suspended: a
@@ -550,11 +558,32 @@ uint8_t usb_kbd_hid_instance(void) { return 1; }
 
 #include "pico/time.h"
 #include "wake.h"
+#include "bt.h"
 
+#ifdef ENABLE_WAKE_HID
 static volatile desc_variant_t desired_variant = DESC_VARIANT_FULL;
+#endif
+// Only ever set on wake builds (usb_set_host_suspended); stays false otherwise.
 static volatile bool host_suspended_flag = false;
 
-// One-shot re-enumeration keeping the same variant. Used exactly once per
+// Exposed-slot high-water mark. `active` is what the live descriptor
+// shows; `desired` is the policy target. Both start at 1: slot 0 only.
+static volatile uint8_t active_exposed_slots = 1;
+static volatile uint8_t desired_exposed_slots = 1;
+
+void usb_notify_slot_connected(uint8_t slot) {
+    const uint8_t need = (uint8_t) (slot + 1);
+    if (need > MULTI_SLOT_COUNT) return;
+    if (need > desired_exposed_slots) desired_exposed_slots = need;
+}
+
+void usb_notify_all_disconnected(void) {
+    desired_exposed_slots = 1;
+}
+
+uint8_t usb_exposed_slot_count(void) { return active_exposed_slots; }
+
+// One-shot re-enumeration keeping the same shape. Used exactly once per
 // flash lifetime: the first controller ever paired supplies the bind-time
 // feature reports (calibration etc.) that the interfaces enumerated without;
 // a single bounce lets the host rebind them against real data.
@@ -572,33 +601,51 @@ static uint64_t      swap_state_entered = 0;
 static constexpr uint64_t SWAP_DISCONNECT_SETTLE_US = 500000;  // 500 ms
 static constexpr uint64_t SWAP_CONNECT_SETTLE_US    = 1500000; // 1500 ms
 
+#ifdef ENABLE_WAKE_HID
 void usb_request_variant_full(void)    { desired_variant = DESC_VARIANT_FULL; }
 void usb_request_variant_minimal(void) { desired_variant = DESC_VARIANT_MINIMAL; }
 void usb_set_host_suspended(bool s)    { host_suspended_flag = s; }
+#endif
 bool usb_variant_swap_in_progress(void) { return swap_state != SWAP_IDLE; }
+
+// Any difference between the desired and active descriptor shape?
+static bool swap_needed(void) {
+    if (rebind_pending) return true;
+    if (desired_exposed_slots != active_exposed_slots) return true;
+#ifdef ENABLE_WAKE_HID
+    if (desired_variant != active_variant) return true;
+#endif
+    return false;
+}
 
 // Cold-boot autosuspend recovery (issue #4). While the gate below holds a
 // pending UP-swap (MINIMAL->FULL) shut, periodically re-issue a USB bus resume
 // to coax the host into re-mounting us (which fires tud_resume_cb/tud_mount_cb
 // -> clears the gate). Rate-limited so we don't spam resume signaling.
 //
-// CRITICAL: only the MINIMAL->FULL direction is nudged. The DOWN-swap
-// (FULL->MINIMAL, requested when the controller disconnects) can legitimately
-// be pending while the host is in a genuine S3 suspend -- a DS5 that powers
-// itself off after the host sleeps leaves desired=MINIMAL, active=FULL. Forcing
-// a resume there would wake the sleeping host, the exact thing the gate exists
-// to prevent. The UP-swap only ever happens right after a controller connects,
-// which is precisely when we DO want the bus back up so the gamepad appears.
+// CRITICAL: only UP-swaps are nudged -- MINIMAL->FULL and exposure GROWTH,
+// which only ever pend right after a controller connects, precisely when we
+// DO want the bus back up so the gamepad appears. DOWN-swaps (FULL->MINIMAL,
+// exposure reset after the last controller leaves) can legitimately be
+// pending while the host is in a genuine S3 suspend -- a DS5 that powers
+// itself off after the host sleeps leaves a shrink pending. Forcing a resume
+// there would wake the sleeping host, the exact thing the gate exists to
+// prevent.
 static constexpr uint64_t SWAP_GATE_RESUME_RETRY_US = 1000000; // 1 s
 static uint64_t swap_gate_last_resume_us = 0;
 
 void usb_variant_task(void) {
     if (host_suspended_flag) {
-        // Never re-enumerate during host suspend. But if an UP-swap to FULL is
-        // pending and the host has us suspended, keep nudging the bus back up so
-        // the gate can clear -- otherwise a host that suspends MINIMAL and never
-        // re-mounts strands the controller in MINIMAL forever (issue #4).
-        if (desired_variant == DESC_VARIANT_FULL && active_variant == DESC_VARIANT_MINIMAL) {
+        // Never re-enumerate during host suspend. But if an UP-swap is
+        // pending and the host has us suspended, keep nudging the bus back up
+        // so the gate can clear -- otherwise a host that suspends and never
+        // re-mounts strands the pending interfaces forever (issue #4).
+        const bool up_pending =
+#ifdef ENABLE_WAKE_HID
+            (desired_variant == DESC_VARIANT_FULL && active_variant == DESC_VARIANT_MINIMAL) ||
+#endif
+            desired_exposed_slots > active_exposed_slots;
+        if (up_pending) {
             const uint64_t now = time_us_64();
             if (now - swap_gate_last_resume_us >= SWAP_GATE_RESUME_RETRY_US) {
                 swap_gate_last_resume_us = now;
@@ -610,7 +657,7 @@ void usb_variant_task(void) {
     const uint64_t now = time_us_64();
     switch (swap_state) {
         case SWAP_IDLE:
-            if (desired_variant != active_variant || rebind_pending) {
+            if (swap_needed()) {
                 rebind_pending = false;
                 wake_reset_for_variant_swap();
                 tud_disconnect();
@@ -620,7 +667,20 @@ void usb_variant_task(void) {
             return;
         case SWAP_DISCONNECTING:
             if (now - swap_state_entered < SWAP_DISCONNECT_SETTLE_US) return;
+#ifdef ENABLE_WAKE_HID
             active_variant = desired_variant;
+#endif
+            active_exposed_slots = desired_exposed_slots;
+#ifndef ENABLE_WAKE_HID
+            // Non-wake builds hide the whole device while no controller is
+            // connected (bt.cpp soft-disconnects on last-disconnect). Commit
+            // the new shape but stay off the bus; bt.cpp's tud_connect() on
+            // the next controller connect resurfaces us with it.
+            if (bt_connected_count() == 0) {
+                swap_state = SWAP_IDLE;
+                return;
+            }
+#endif
             tud_connect();
             swap_state = SWAP_CONNECTING;
             swap_state_entered = now;
@@ -631,7 +691,6 @@ void usb_variant_task(void) {
             return;
     }
 }
-#endif // ENABLE_WAKE_HID
 
 // Invoked when received GET CONFIGURATION DESCRIPTOR
 // Application return pointer to descriptor
@@ -673,6 +732,16 @@ uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {
         descriptor_configuration[end - 8] = bInterval;
         descriptor_configuration[end - 16] = report_len_lo;
     }
+    // Truncate to the exposed-slot count: the trailing gamepad blocks (slots
+    // >= active_exposed_slots) are simply not reported to the host. wTotalLength
+    // (bytes 2-3) and bNumInterfaces (byte 4) shrink together; the static
+    // array itself keeps its full-size contents.
+    const uint8_t exposed = active_exposed_slots;
+    const uint16_t total_len =
+        (uint16_t) (base_set_end + (size_t) (exposed - 1) * CONFIG_DESC_LEN_GAMEPAD);
+    descriptor_configuration[2] = (uint8_t) (total_len & 0xFF);
+    descriptor_configuration[3] = (uint8_t) (total_len >> 8);
+    descriptor_configuration[4] = (uint8_t) (ITF_NUM_BASE_TOTAL + exposed - 1);
     return descriptor_configuration;
 }
 

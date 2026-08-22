@@ -78,9 +78,13 @@ click **Pair new controller**. This:
    previous controller is held off during the window so it can't grab the slot
    back before the new one finishes pairing.
 
-> The config page is reachable whether or not a controller is connected, so you
-> can also reach it (and pair) when the adapter is idle. Note the page may blip
-> briefly as the adapter swaps USB modes around a connect/disconnect.
+> The config page **sleeps during normal play** (it shares the radio and CPU
+> with the controller hot path): it is served only while the adapter is in
+> pairing mode — hold **PS + Create** ~3 s on a connected pad, or have nothing
+> bonded yet — and for a ~10-minute grace session afterwards, refreshed while
+> you're actually using the page. Outside that window the page (and the
+> adapter's `.local` name) simply doesn't answer; re-enter pairing mode to
+> wake it.
 
 ---
 
@@ -166,20 +170,23 @@ mean the same thing.
 | --- | --- |
 | **Solid orange** (whole strip) | **Flash mode.** The adapter is in the UF2 bootloader waiting for firmware — the `RP2350` drive is mounted on your PC. Shown from the moment you press **Flash mode** until the freshly flashed firmware starts (the strip then snaps to the normal display, confirming the flash took). |
 | **Solid red** (whole strip) | **Firmware error.** The firmware crashed and was restarted by the watchdog, or is stuck in a reboot loop (e.g. the radio failed to start). Red that clears after a few seconds means it recovered on its own; red that stays means it's boot-looping — unplug and replug the adapter. |
-| **Blinking yellow** (slot's LEDs, ~1 s cycle) | That controller's battery is at or below **40%** (discharging). |
-| **Blinking red** (slot's LEDs, fast) | That controller's battery is at or below **20%** (discharging) — charge it now. |
 
 The fixed codes deliberately win over everything else, including the LED
 debug panel's overrides — if the strip goes solid red or orange, that is the
 adapter itself talking.
 
-**Configurable displays** (Lights section of the config page):
+**Configurable displays** (Lights section of the config page). Every state
+below has a configurable color **and** animation (solid / blink / pulse /
+off) under **Animations & colors**; the defaults are:
 
-| Strip shows | Meaning |
+| Strip shows (default) | Meaning |
 | --- | --- |
-| **Breathing color** (whole strip, default blue) | Powered on, no controller connected, not pairing — waiting for a pad. Color: **Waiting color**. |
+| **Off** (whole strip) | Powered on, no controller connected, not pairing. The **Waiting** state is off by default; give it a color + animation (e.g. pulse blue) for a "powered and waiting" display. |
 | **Solid slot color** (slot's LEDs, default blue) | That slot's controller is connected and healthy. Color: **Slot colors** (matches the pad's lightbar). |
-| **Blinking color** (chosen pixels, default white) | Pairing mode — the adapter is searching for a controller. Pixels and color: the **Pairing** row of the layout grid. |
+| **Off/black** (empty seat's LEDs) | No controller in that seat while others are connected. Give **Empty slot** a color to mark vacant seats. |
+| **Solid yellow** (slot's LEDs) | That controller's battery is at or below **40%** (discharging). |
+| **Blinking red** (slot's LEDs, fast) | At or below **20%** (discharging) — charge it now. The one state that still blinks out of the box. |
+| **Solid white** (chosen pixels) | Pairing mode — the adapter is searching for a controller. Pixels and color: the **Pairing** row of the layout grid. |
 
 ---
 
