@@ -622,78 +622,24 @@ int main() {
   critical_section_init(&report_cs);
   wake_init();
 
-  // WiFi onboarding (AP + captive portal) is a dedicated setup mode: no
-  // controller, no audio. Crucially, BT classic page-scan/inquiry contends
-  // with the SoftAP on the single shared CYW43 radio -- upstream observed the
-  // AP beaconing but never admitting a station with BT up (stas=0, client
-  // loops DHCP forever). So in AP mode we skip BT + audio entirely, handing
-  // the radio to the AP (and freeing ~110 KB of heap; core1 is never
-  // launched, which is why config_save() has the direct-write path). Normal
-  // STA operation brings BT/audio up as usual.
-  const bool ap_onboarding = wifi_net_in_ap_mode();
-  if (!ap_onboarding) {
-    watchdog_update();
-    bt_init();
-    bt_register_data_callback(on_bt_data);
+  watchdog_update();
+  bt_init();
+  bt_register_data_callback(on_bt_data);
 
-    watchdog_update();
-    audio_init();
-    state_init();
-  } else {
-    printf("[BOOT] AP onboarding mode: skipping BT + audio (radio handed to SoftAP)\n");
-  }
+  watchdog_update();
+  audio_init();
+  state_init();
 
 #ifdef ENABLE_WAKE_HID
-  // Enumerate immediately as the FULL variant: every gamepad interface (plus
-  // audio, NCM, wake keyboard) is present whenever the dongle is plugged in,
-  // so controllers join and leave with zero USB disruption. Bind-time feature
-  // probes for not-yet-connected pads are answered from the persisted
-  // snapshot (bt_feature_snapshot_get). Being enumerated before the host
-  // suspends is also what makes remote-wakeup possible.
-  //
-  // NEVER in AP onboarding mode. Unlike upstream (whose onboarding enumerates
-  // an inert MINIMAL device), our FULL face exposes audio + gamepad
-  // interfaces whose backing state (audio_init, state_init) was deliberately
-  // skipped above. In the NCM era the host's first ethernet frame hit the
-  // NULL netif input fn: hard fault -> watchdog -> re-enumerate, a
-  // crash/replug storm that bootlooped the dongle and took the host's USB
-  // stack with it (HW-observed on SteamOS). The uninitialised audio/HID
-  // state is the same class of trap, so the rule stands with NCM gone:
-  // during onboarding USB is power only; the device is configured over the
-  // portal and reboots into STA when done.
-  if (!ap_onboarding) {
-    tud_connect();
-  }
+  // Enumerate immediately (FULL variant; one gamepad interface to start, see
+  // the exposed-slot orchestrator). Bind-time feature probes for
+  // not-yet-connected pads are answered from the persisted snapshot
+  // (bt_feature_snapshot_get). Being enumerated before the host suspends is
+  // also what makes remote-wakeup possible.
+  tud_connect();
 #endif
 
   watchdog_enable(1000, true);
-
-  // Onboarding loop: a stripped main loop with BT/audio/HID skipped (they were
-  // never initialised in AP mode). Pump only the radio/lwIP (cyw43_arch_poll +
-  // wifi_net_task drive the SoftAP RX, DHCP/DNS servers, scan, captive portal)
-  // and feed the watchdog. USB stays tud_disconnect()'d (see above); tud_task
-  // is still pumped so the stack stays consistent if anything ever connects
-  // it. The device leaves this loop by rebooting into STA mode once the user
-  // provisions (wifi_net_task fires the deferred watchdog_reboot). The LED
-  // strip and the NCM web server are deliberately not serviced here -- setup
-  // mode only.
-  if (ap_onboarding) {
-    while (1) {
-      watchdog_update();
-      cyw43_arch_poll();
-      tud_task();
-      wifi_net_task();
-#ifdef ENABLE_LED_STRIP
-      // Setup-mode indicator: teal chase (reserved for onboarding). Not
-      // ledstrip_tick() -- that reads BT state, which was never initialised
-      // in this mode. Its first frame also clears a panic-red frame latched
-      // by a prior crash blink, which the render-nothing AP loop would
-      // otherwise leave lit forever.
-      ledstrip_setup_chase_tick();
-#endif
-      sleep_us(250);
-    }
-  }
 
   while (1) {
     watchdog_update();

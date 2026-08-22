@@ -114,8 +114,8 @@ const Config *flash_config() {
 // lowercase a-z, 0-9 and hyphen; uppercase folded to lowercase; any other
 // character dropped; no leading/trailing hyphen; NUL-terminated within
 // CONFIG_HOSTNAME_LEN. If nothing valid remains, reset to CONFIG_HOSTNAME_DEFAULT.
-// Used for the user-set mDNS hostname so a fat-fingered entry can't produce an
-// illegal "<name>.local" or strand discovery.
+// Used for the user-set DHCP hostname so a fat-fingered entry can't produce an
+// illegal name.
 static void sanitize_hostname(char *host) {
   char clean[CONFIG_HOSTNAME_LEN];
   size_t out = 0;
@@ -273,13 +273,13 @@ void config_valid() {
   }
   // Force-terminate then sanitize the hostname to a valid DNS label, defaulting
   // it when empty/invalid. Runs on every load + save so corrupt flash or a bad
-  // web entry can never advertise an illegal "<name>.local".
+  // config-page entry can never report an illegal hostname.
   body->hostname[CONFIG_HOSTNAME_LEN - 1] = '\0';
   sanitize_hostname(body->hostname);
   // WiFi creds (onboarding). Force NUL-termination so corrupt flash can't
   // yield an unbounded SSID/PSK string. wifi_provisioned only ever means
   // "STA creds present"; an empty SSID can't be a usable join target, so clear
-  // the flag in that case -> the WiFi build falls back to the AP captive portal
+  // the flag in that case -> the WiFi build leaves WiFi idle
   // instead of attempting a doomed join. (The PSK may legitimately be empty for
   // an open network, so it is not part of this gate.)
   body->wifi_ssid[CONFIG_WIFI_SSID_LEN - 1] = '\0';

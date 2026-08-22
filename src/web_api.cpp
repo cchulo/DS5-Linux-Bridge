@@ -1,25 +1,20 @@
 //
-// web_api.cpp -- the on-device web UI: config page + JSON API + captive
-// portal, served by lwIP httpd. Transport-agnostic (see web_api.h): the same
-// handlers answer over the USB-NCM netif and the CYW43 WiFi netif; lwIP has
-// one httpd regardless of how many netifs feed it.
+// web_api.cpp -- the adapter's configuration API: JSON GET routes + form POST
+// handlers, transport-agnostic. The only transport today is the USB HID
+// config tunnel (hid_config.cpp); the page that drives it is web/index.html.
+// The lwIP httpd / mDNS / captive-portal transport was removed (config must
+// never depend on the network); the route shapes are unchanged from that era
+// so existing clients keep working.
 //
-// Factored out of the retired NCM transport (migration phase 2), mirroring
-// upstream kungaa's web_api split. The POST machinery carries upstream's
-// hardening: a body-less POST can't strstr() a previous request's leftovers,
-// and a partial body (client died mid-POST) is rejected instead of applied.
+// The POST machinery keeps upstream's hardening: bodies are NUL-terminated
+// before parsing and every value is clamped to config_valid()'s ranges.
 //
 
 #include "web_api.h"
 
-#ifdef ENABLE_WIFI_WOL
-
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-
-#include "lwip/apps/fs.h"
-#include "lwip/apps/httpd.h"
 
 #include "hardware/watchdog.h"
 #include "pico/bootrom.h"
@@ -32,46 +27,23 @@
 #include "ledstrip.h"
 #endif
 #include "config.h"
-#include "web_page.h"
 #include "weblog.h"
-#ifdef ENABLE_WIFI_WOL
 #include "wifi_net.h"
-#include "web_portal.h" // onboarding captive-portal page (served in AP mode)
 
+#ifdef ENABLE_WIFI_WOL
 // Results of the wifi provision/reset POSTs, reported via the synthetic
-// /api/wifi_*_result routes. Set in the POST handlers (below fs_open_custom,
-// which reads them), so declare here.
+// /api/wifi_*_result routes.
 static bool provision_ok;
 static bool wifi_reset_ok;
 #endif
 
 // Result of the most recent POST /api/wol ("Wake now"), reported via the
-// synthetic /api/wol_result route (read in fs_open_custom, set below it).
+// synthetic /api/wol_result route.
 static bool last_wol_ok;
 
 //--------------------------------------------------------------------+
-// HTTP content: / (page), /api/config -- via fs_open_custom
+// GET routes
 //--------------------------------------------------------------------+
-
-// Build a complete response (headers + body) into a malloc'd buffer owned by
-// the fs_file (freed in fs_close_custom).
-static int make_file(struct fs_file *file, const char *status, const char *content_type,
-                     const char *body, int body_len) {
-    const int hdr_max = 160;
-    char *buf = (char *) malloc(hdr_max + body_len);
-    if (!buf) return 0;
-    int hdr_len = snprintf(buf, hdr_max,
-                           "HTTP/1.1 %s\r\nContent-Type: %s\r\nCache-Control: no-store\r\n"
-                           "Connection: close\r\nContent-Length: %d\r\n\r\n",
-                           status, content_type, body_len);
-    memcpy(buf + hdr_len, body, body_len);
-    memset(file, 0, sizeof(*file));
-    file->data = buf; // malloc'd; reclaimed in fs_close_custom via file->data
-    file->len = (int) (hdr_len + body_len);
-    file->index = file->len;
-    file->flags = FS_FILE_FLAGS_HEADER_INCLUDED;
-    return 1;
-}
 
 // "AABBCCDDEEFF" (12 hex, no separators). Forward declaration; defined with
 // the bond helpers below.
@@ -287,9 +259,10 @@ static int json_slots(char *out, size_t cap) {
     const char *led_flag = "false";
 #endif
     int w = snprintf(out, cap,
-                     "{\"max\":%u,\"connected\":%d,\"usb_exposed\":%u,\"audio_slot\":%u,\"audio_allowed\":%s,\"led\":%s,\"slots\":[",
+                     "{\"max\":%u,\"connected\":%d,\"usb_exposed\":%u,\"audio_slot\":%u,\"audio_allowed\":%s,\"led\":%s,\"wifi\":\"%s\",\"slots\":[",
                      BT_MAX_SLOTS, bt_connected_count(), usb_exposed_slot_count(),
-                     tier_audio_slot(), tier_audio_allowed() ? "true" : "false", led_flag);
+                     tier_audio_slot(), tier_audio_allowed() ? "true" : "false", led_flag,
+                     wifi_net_state());
     for (int i = 0; i < BT_MAX_SLOTS && w < (int) cap; i++) {
         BtStatus s;
         bt_get_status((uint8_t) i, &s);
@@ -321,9 +294,9 @@ static int json_slots(char *out, size_t cap) {
 // Every GET route renders its body into a caller-supplied buffer and reports
 // an HTTP-style status; every POST dispatches and returns the synthetic
 // result route whose GET carries the outcome (see web_api_post below).
-// lwIP httpd (fs_open_custom / httpd_post_*) and the USB HID config tunnel
-// (hid_config.cpp) are both thin adapters over these two functions, so the
-// JSON shapes, form parsing and validation are shared byte-for-byte.
+// The USB HID config tunnel (hid_config.cpp) is a thin adapter over these
+// two functions; any future transport should be too, so JSON shapes, form
+// parsing and validation stay shared byte-for-byte.
 //--------------------------------------------------------------------+
 
 static int put_text(char *out, size_t cap, const char *s) {
@@ -367,12 +340,6 @@ int web_api_get(const char *name, char *out, size_t cap, int *status) {
         // Synthetic reply for POST /api/wol ("Wake now").
         len = snprintf(out, cap, "{\"ok\":%s}", last_wol_ok ? "true" : "false");
 #ifdef ENABLE_WIFI_WOL
-    } else if (strcmp(name, "/api/wifi_scan") == 0) {
-        // A scan is kicked off on first hit; later hits are the portal's
-        // rate-limited refresh (see wifi_scan_start guards). Only live in AP
-        // mode (wifi_scan_start no-ops otherwise; the list is then empty).
-        wifi_scan_start();
-        len = wifi_scan_json(out, cap);
     } else if (strcmp(name, "/api/wifi_provision_result") == 0) {
         // Synthetic reply for the provision POST: whether the creds were
         // accepted; the device reboots to join shortly after.
@@ -411,83 +378,6 @@ int web_api_get(const char *name, char *out, size_t cap, int *status) {
     return len;
 }
 
-extern "C" int fs_open_custom(struct fs_file *file, const char *name) {
-#ifdef ENABLE_WIFI_WOL
-    // Onboarding mode: serve the captive portal for essentially every GET.
-    if (wifi_net_in_ap_mode()) {
-        // In AP mode the network is OPEN and BT is never initialized, so only
-        // the onboarding routes may reach the shared handlers. Everything else
-        // under /api/ (config, bonds -- forgetall really erases the TLV,
-        // status, slots, led) is 404'd so a nearby actor who joins
-        // DS5-Setup-XXXX can't rewrite config or wipe bonds. The portal page
-        // itself only ever calls wifi_scan + wifi_provision(_result).
-        const bool is_portal_api =
-            (strcmp(name, "/api/wifi_scan") == 0) ||
-            (strcmp(name, "/api/wifi_provision") == 0) ||
-            (strcmp(name, "/api/wifi_provision_result") == 0);
-        const bool other_api = (strncmp(name, "/api/", 5) == 0);
-        if (other_api && !is_portal_api) {
-            // A non-onboarding API GET in AP mode: reject.
-            static const char nf[] = "not found";
-            return make_file(file, "404 Not Found", "text/plain", nf, sizeof(nf) - 1);
-        }
-        if (!is_portal_api) {
-            // Serve the portal page itself (200) for the root, the OS captive-probe
-            // URLs (Windows /connecttest.txt + /index.shtml; Apple
-            // /hotspot-detect.html; Android /generate_204; ...), AND any other GET.
-            // We deliberately do NOT 302-redirect: redirecting probe URLs on the
-            // SAME host makes the captive mini-browser re-request in a tight loop
-            // and never render. Returning the page body directly for every path
-            // breaks that loop and makes the "Sign in" sheet show the form
-            // immediately. (make_file copies the ~4.6 KB page per request --
-            // fine in AP mode, where BT/audio never start and the heap is free.)
-            return make_file(file, "200 OK", "text/html; charset=utf-8",
-                             PORTAL_PAGE, (int) (sizeof(PORTAL_PAGE) - 1));
-        }
-    }
-#endif
-    if (strcmp(name, "/") == 0 || strcmp(name, "/index.html") == 0) {
-        // Serve the page straight from flash (headers included) -- zero heap.
-        memset(file, 0, sizeof(*file));
-        file->data = WEB_PAGE_RESPONSE;
-        file->len = (int) (sizeof(WEB_PAGE_RESPONSE) - 1);
-        file->index = file->len;
-        file->flags = FS_FILE_FLAGS_HEADER_INCLUDED;
-        return 1;
-    }
-    // Shared scratch: make_file() copies the body into its own malloc'd
-    // buffer before returning, and httpd serves one custom file at a time,
-    // so one static buffer covers every route (saves BSS -> heap). Sized for
-    // the largest route (/api/log).
-    static char body[WEB_API_RESP_CAP];
-    int status = 0;
-    const int len = web_api_get(name, body, sizeof(body), &status);
-    if (len < 0) return 0; // unknown route -> lwIP's default 404
-    const char *st = status == 200 ? "200 OK"
-                   : status == 404 ? "404 Not Found"
-                   : status == 409 ? "409 Conflict"
-                   : "500 Internal Server Error";
-    const char *ct = (len > 0 && body[0] == '{') ? "application/json"
-                                                 : "text/plain; charset=utf-8";
-    return make_file(file, st, ct, body, len);
-}
-
-extern "C" void fs_close_custom(struct fs_file *file) {
-    // Everything except the flash-resident page response is malloc'd by
-    // make_file().
-    if (file && file->data && file->data != WEB_PAGE_RESPONSE) {
-        free(const_cast<char *>(file->data));
-    }
-    if (file) file->data = NULL;
-}
-
-extern "C" int fs_read_custom(struct fs_file *file, char *buffer, int count) {
-    (void) file;
-    (void) buffer;
-    (void) count;
-    return FS_READ_EOF; // all content is provided up front in fs_open_custom
-}
-
 //--------------------------------------------------------------------+
 // POST /api/config -- form fields:
 //   speaker_volume, inactive_time, disable_inactive_disconnect,
@@ -496,18 +386,9 @@ extern "C" int fs_read_custom(struct fs_file *file, char *buffer, int count) {
 // POST can never persist an out-of-range setting.
 //--------------------------------------------------------------------+
 
-// Must hold the ENTIRE /api/config save body (the page posts every field in
-// one form body; ~550 B worst-case with the LED animation/color fields) --
-// httpd_post_begin hard-rejects anything longer.
-#define POST_BUFSIZE 768
-static char post_buf[POST_BUFSIZE];
-static u16_t post_pos;
-static void *post_conn;
 enum post_target_t { POST_CONFIG, POST_BONDS, POST_SLOTS, POST_LED, POST_REBOOT,
                      POST_WIFI_PROVISION, POST_WIFI_RESET, POST_WOL,
                      POST_RESOLVE_MAC };
-static post_target_t post_target; // which endpoint the in-flight POST targets
-static int post_content_len; // declared Content-Length; -1 = none sent
 static bool last_save_ok = true; // result of the most recent config_save()
 static bool last_action_ok = true; // result of the most recent slots/led action
 static bool last_pair_rejected = false; // pair action refused (no free bond/slot)
@@ -890,7 +771,7 @@ static void apply_reboot_post(char *body) {
            last_action_ok ? "ARMED (BOOTSEL in 500ms)" : "REJECTED");
 }
 
-// POST /api/wifi_provision -- ssid=...&psk=... from the onboarding portal.
+// POST /api/wifi_provision -- ssid=...&psk=... from the config page (over USB).
 // Saves the home-WLAN credentials and schedules a reboot into STA mode
 // (wifi_provision_apply owns the persist + deferred reset). The JSON reply is
 // sent before the reboot fires so the phone sees success.
@@ -919,7 +800,7 @@ static void apply_wifi_provision_post(char *body) {
 
 // POST /api/wifi_reset -- from the normal config page after the device is on
 // the home WLAN. Clears stored WiFi credentials and schedules a reboot; the
-// next boot is unprovisioned, so it starts the AP captive portal.
+// next boot is unprovisioned, so WiFi stays idle.
 static void apply_wifi_reset_post(void) {
     wifi_reset_ok = wifi_reset_provisioning_apply();
     printf("[NET] wifi reset %s\n", wifi_reset_ok ? "accepted" : "rejected");
@@ -949,8 +830,8 @@ static void apply_wol_post(char *body) {
 // POST /api/resolve_mac -- ip=A.B.C.D. Kicks off an ARP lookup for that
 // address so the UI can auto-fill the WOL target MAC instead of the user
 // hunting it down by hand. Non-blocking: this only STARTS the lookup (the
-// httpd POST callback runs nested inside lwIP's tcp_input, so it must never
-// pump the stack); the browser polls GET /api/resolve_mac for the result once
+// handler must never pump the lwIP stack itself); the page polls GET
+// /api/resolve_mac for the result once
 // wifi_net_task() has driven the ARP query.
 static void apply_resolve_mac_post(char *body) {
     unsigned a = 0, b = 0, cc = 0, d = 0;
@@ -1040,83 +921,13 @@ const char *web_api_post(const char *uri, char *body) {
     return dispatch_post(target, body);
 }
 
-extern "C" err_t httpd_post_begin(void *connection, const char *uri, const char *http_request,
-                                  u16_t http_request_len, int content_len, char *response_uri,
-                                  u16_t response_uri_len, u8_t *post_auto_wnd) {
-    (void) http_request;
-    (void) http_request_len;
-    (void) response_uri;
-    (void) response_uri_len;
-    (void) post_auto_wnd;
-    post_target_t target;
-    if (!post_target_for(uri, &target)) return ERR_VAL;
-#ifdef ENABLE_WIFI_WOL
-    // In AP onboarding mode reject every POST except the provision flow. The
-    // open AP + uninitialized BT means POST /api/bonds action=forgetall
-    // (gap_delete_all_link_keys erases the TLV even with BT down) or
-    // POST /api/config (rewrites+persists settings) must not be reachable.
-    if (wifi_net_in_ap_mode() &&
-        target != POST_WIFI_PROVISION && target != POST_WIFI_RESET) {
-        return ERR_VAL;
-    }
-#endif
-    if (content_len >= POST_BUFSIZE) return ERR_VAL;
-    if (post_conn) return ERR_USE; // one POST at a time
-    post_conn = connection;
-    post_pos = 0;
-    // Terminate now: a body-less POST never runs httpd_post_receive_data, and
-    // the finished handler must not strstr() a previous request's leftovers.
-    post_buf[0] = 0;
-    post_target = target;
-    post_content_len = content_len; // -1 when the client sent no Content-Length
-    return ERR_OK;
-}
-
-extern "C" err_t httpd_post_receive_data(void *connection, struct pbuf *p) {
-    if (connection == post_conn && p) {
-        const u16_t space = POST_BUFSIZE - 1 - post_pos;
-        const u16_t take = p->tot_len < space ? p->tot_len : space;
-        post_pos += pbuf_copy_partial(p, post_buf + post_pos, take, 0);
-        post_buf[post_pos] = 0;
-    }
-    if (p) pbuf_free(p);
-    return ERR_OK;
-}
-
-extern "C" void httpd_post_finished(void *connection, char *response_uri, u16_t response_uri_len) {
-    if (connection != post_conn) return;
-    post_conn = nullptr;
-
-    // lwIP httpd also calls this when a POST connection dies mid-body. If the
-    // client declared a Content-Length and we didn't receive all of it, the
-    // body is partial -- applying it can persist a silently-wrong value and
-    // burn a flash erase/program cycle for a request the client never
-    // finished. Reject without applying. (content_len == -1 means the client
-    // sent no length, so we can't tell; fall through to the old behavior.)
-    if (post_content_len >= 0 && post_pos != (u16_t) post_content_len) {
-        snprintf(response_uri, response_uri_len, "/api/save-failed");
-        return;
-    }
-
-    snprintf(response_uri, response_uri_len, "%s", dispatch_post(post_target, post_buf));
-}
-
 //--------------------------------------------------------------------+
 // Init / service
 //--------------------------------------------------------------------+
 
-void web_api_init() {
-    // One lwIP stack, one httpd listener; guarded in case a future second
-    // caller joins wifi_net_init().
-    static bool started = false;
-    if (started) return;
-    started = true;
-    httpd_init();
-}
-
 void web_api_task() {
     // Deferred BOOTSEL reboot (POST /api/reboot). The 500 ms grace lets the
-    // HTTP response reach the browser before the device leaves the bus; the
+    // reply reach the config page before the device leaves the bus; the
     // main loop keeps feeding the watchdog until then.
     if (bootsel_pending && time_reached(bootsel_at)) {
         printf("[NET] entering BOOTSEL (UF2 flash mode)\n");
@@ -1130,5 +941,3 @@ void web_api_task() {
         rom_reset_usb_boot_extra(-1, 0, false); // does not return
     }
 }
-
-#endif // ENABLE_WIFI_WOL

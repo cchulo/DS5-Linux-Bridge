@@ -83,14 +83,12 @@ message(STATUS "DS5-Linux-Bridge build target -- WAVESHARE_RP2350B_PLUS_W_BUILD=
 # no USB-CDC serial. USB serial was removed because it perturbed the very USB
 # timing it was meant to diagnose (and was unreliable). See README "Debugging".
 
-# WiFi transport (STA mode on the onboard CYW43 -- the same chip BTstack
-# drives; the WiFi firmware blob is already in the image): config web UI,
-# first-boot captive-portal onboarding, Wake-on-LAN. Ported from
-# kungaa/DS5-Linux-Bridge. The ONLY config transport -- the USB-NCM one was
-# removed (migration phase 4) so the USB face stays pure DualSense. Sets
-# CYW43_LWIP=1 so the SDK's cyw43_arch owns lwIP and wires it to the WiFi
-# netif. OFF = no web UI at all.
-option(ENABLE_WIFI_WOL "Serve the config page + send Wake-on-LAN over the onboard CYW43 Wi-Fi (STA mode)" ON)
+# WiFi uplink (STA mode on the onboard CYW43 -- the same chip BTstack drives;
+# the WiFi firmware blob is already in the image) for Wake-on-LAN only.
+# Configuration is over USB in every build (src/hid_config.cpp). Sets
+# CYW43_LWIP=1 so the SDK's cyw43_arch owns lwIP (DHCP client + the UDP magic
+# packet) and wires it to the WiFi netif. OFF = no Wake-on-LAN.
+option(ENABLE_WIFI_WOL "Join the home Wi-Fi (STA) to send Wake-on-LAN magic packets" ON)
 if (ENABLE_WIFI_WOL)
     set(CYW43_LWIP_VALUE 1)
 else ()
@@ -153,6 +151,8 @@ add_executable(ds5-bridge
         src/tier.cpp
         src/flash_bank_safe.cpp
         src/weblog.cpp
+        src/web_api.cpp     # config API (transport-agnostic route layer)
+        src/hid_config.cpp  # USB HID config tunnel (web/index.html drives it)
         src/ram_mem.c
 )
 
@@ -163,34 +163,12 @@ set_source_files_properties(src/ram_mem.c PROPERTIES COMPILE_OPTIONS
         "-fno-builtin;-fno-tree-loop-distribute-patterns")
 
 if (ENABLE_WIFI_WOL)
-    target_sources(ds5-bridge PRIVATE
-            src/web_api.cpp
-            src/hid_config.cpp
-            src/wifi_net.cpp
-            # Onboarding captive portal (AP mode): tiny DHCP + DNS servers so a
-            # phone gets a lease and every lookup resolves to the portal page.
-            # Vendored from upstream kungaa (originally pico-examples); the
-            # dhcpserver.h pool constants are re-homed to the 10.55.55.104/29
-            # AP plan. See lib/portal.
-            lib/portal/dhcpserver.c
-            lib/portal/dnsserver.c
-    )
-    target_include_directories(ds5-bridge PRIVATE
-            lib/portal
-    )
-    # Setup-AP password (deliberately not secret -- a doorman against
-    # drive-by joins, not a vault; see wifi_net.cpp). 8..63 chars (WPA2).
-    set(WIFI_SETUP_PSK "dualsense" CACHE STRING "WPA2 password for the DS5-Setup-XXXX onboarding AP (8..63 chars)")
-    target_compile_definitions(ds5-bridge PRIVATE
-            ENABLE_WIFI_WOL
-            WIFI_AP_SETUP_PSK="${WIFI_SETUP_PSK}"
-    )
-    target_link_libraries(ds5-bridge
-            pico_unique_id   # AP SSID suffix (DS5-Setup-XXXX)
-            pico_lwip_nosys
-            pico_lwip_http
-            pico_lwip_mdns   # <hostname>.local discovery on the home LAN
-    )
+    # WiFi is the Wake-on-LAN uplink only (STA join + DHCP client + one UDP
+    # magic packet). No web server, mDNS or captive portal -- configuration
+    # is over USB (src/hid_config.cpp), in every build.
+    target_sources(ds5-bridge PRIVATE src/wifi_net.cpp)
+    target_compile_definitions(ds5-bridge PRIVATE ENABLE_WIFI_WOL)
+    target_link_libraries(ds5-bridge pico_lwip_nosys)
 endif ()
 
 if (ENABLE_BATT_LED)

@@ -2,8 +2,7 @@
 // hid_config.cpp -- USB HID config tunnel. Protocol in hid_config.h.
 //
 // Commands execute inside TinyUSB's SET_REPORT callback (tud_task, main
-// loop, core0) -- the same context the lwIP httpd handlers ran in -- so the
-// web_api handlers need no new locking. The reply for the next GET 0x81 is
+// loop, core0), so the web_api handlers need no locking. The reply for the next GET 0x81 is
 // prepared here and only copied out in the GET callback.
 //
 
@@ -19,7 +18,7 @@ constexpr uint8_t MAGIC[4] = {'D', 'S', '5', 'B'};
 constexpr size_t HDR = 8;
 constexpr size_t PAYLOAD = HID_CONFIG_REPORT_LEN - HDR; // 55
 constexpr size_t ROUTE_CAP = 48;
-// Same ceiling as the httpd POST buffer: the whole /api/config form body.
+// Must hold the whole /api/config form body (~550 B worst case).
 constexpr size_t POST_CAP = 768;
 
 enum : uint8_t {

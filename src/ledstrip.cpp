@@ -278,41 +278,6 @@ void ledstrip_hold_solid(uint8_t r, uint8_t g, uint8_t b) {
 
 void ledstrip_panic_red() { ledstrip_hold_solid(255, 0, 0); }
 
-void ledstrip_setup_chase_tick() {
-    if (!led_ready) return;
-    const uint64_t now = time_us_64();
-    if (now < next_frame_us) return;
-    next_frame_us = now + FRAME_INTERVAL_US;
-    const uint32_t ms = (uint32_t) (now / 1000);
-
-    // Deliberately self-contained: the WiFi-onboarding loop is the only
-    // caller, and there BT was never initialised, so unlike ledstrip_tick()
-    // this must not read bt_get_status()/bt_pairing_mode_active(). Teal is
-    // reserved for setup mode (no other status uses it), fixed rather than
-    // configurable so it is recognizable even on a fresh/factory-reset config.
-    // Full-scale channels: every other status color drives at least one
-    // channel at 255, and the shared gamma curve crushes mid-range values --
-    // the earlier {0,96,128} gamma'd down to ~1/5 the brightness of the
-    // red/blue indicators and read as faint. Same 3:4 green:blue hue.
-    constexpr uint8_t SETUP_TEAL[3] = {0, 191, 255};
-
-    // Single teal pixel walking the chain — same dwell as the debug chase, a
-    // deliberately different motion from every status animation so setup mode
-    // can't be mistaken for the idle breathe.
-    const int count = led_count();
-    const int lit = (int) ((ms / DEBUG_CHASE_MS) % count);
-    // Push the full MAX like ledstrip_tick(): pixels past led_count stay
-    // dark, and a stale held frame (e.g. latched panic red from a prior
-    // crash blink) is fully overwritten from the first frame.
-    for (int i = 0; i < MAX_PIXELS; i++) {
-        const bool on = i == lit;
-        const uint32_t grb = ((uint32_t) shape(on ? SETUP_TEAL[1] : 0) << 16) |
-                             ((uint32_t) shape(on ? SETUP_TEAL[0] : 0) << 8) |
-                             (uint32_t) shape(on ? SETUP_TEAL[2] : 0);
-        pio_sm_put_blocking(led_pio, led_sm, grb << 8u);
-    }
-}
-
 void ledstrip_tick() {
     if (!led_ready) return;
     const uint64_t now = time_us_64();

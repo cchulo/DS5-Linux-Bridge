@@ -92,9 +92,10 @@ config page, and OS-specific behavior and troubleshooting.
   HID descriptor stays byte-identical to real hardware. Protocol and command
   list: [`src/hid_config.h`](src/hid_config.h); any hidapi/Electron program
   can drive the same `/api/*` routes.
-- WiFi is now **Wake-on-LAN only**: enter the network under *Network* on the
+- WiFi is **Wake-on-LAN only**: enter the network under *Network* on the
   page (saved over USB). With no network saved the adapter boots with WiFi
-  off and BT/USB fully up — there is no captive-portal onboarding anymore.
+  off and BT/USB fully up. There is no web server, mDNS or captive portal in
+  the firmware at all — nothing on your LAN can reach or configure it.
 - On Linux the adapter must be accessible to your user: with Steam installed
   its udev rules already cover Sony (`054c`) gamepads; otherwise add a rule
   for that vendor ID.
@@ -156,7 +157,7 @@ config page, and OS-specific behavior and troubleshooting.
 - **Hybrid hardware mic mute** — local mute via the physical Mute button,
   synced with the host sound panel.
 - **On-device web config + bond management** — the adapter hosts its own
-  configuration page (no app, any browser) at `http://10.55.55.105/`.
+  configuration page over USB (`web/index.html` in Chrome/Edge).
 - **Wake from sleep (S3 / S5)** — wake the host by turning on the controller.
 - **Low-latency performance** — Bluetooth/USB/audio hot paths run from RAM to
   avoid flash cache thrashing.
@@ -172,7 +173,7 @@ config page, and OS-specific behavior and troubleshooting.
 2. **Pair** — put the DualSense in pairing mode (hold **Share + PS** until the
    lightbar double-blinks). To add more controllers, use **Pair new
    controller** on the config page.
-3. **Configure** *(optional)* — browse to `http://10.55.55.105/` to change
+3. **Configure** *(optional)* — open `web/index.html` in a Chromium browser, press Connect, to change
    settings, colors, the LED layout, or paired controllers.
 
 ---

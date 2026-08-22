@@ -35,15 +35,15 @@
 #define LED_ANIM_PULSE 3 // raised-cosine breathe
 #define LED_ANIM_OFF   4
 
-// mDNS / network hostname (the "<name>.local" the dongle advertises). User-set
-// so two dongles on one LAN don't both claim ds5.local. Max 10 chars + NUL;
+// Network (DHCP) hostname the dongle reports to the router. User-set so two
+// dongles on one LAN are distinguishable. Max 10 chars + NUL;
 // validated to a DNS label (lowercase a-z, 0-9, hyphen; no leading/trailing
 // hyphen) in config_valid(). See CONFIG_HOSTNAME_DEFAULT.
 #define CONFIG_HOSTNAME_LEN     11
 #define CONFIG_HOSTNAME_DEFAULT "ds5"
 
-// Home-WLAN credentials for the WiFi transport's STA join (ENABLE_WIFI_WOL).
-// Filled by the onboarding captive portal and persisted to flash. SSID is 32
+// Home-WLAN credentials for the Wake-on-LAN STA join (ENABLE_WIFI_WOL).
+// Entered on the USB config page and persisted to flash. SSID is 32
 // octets max (802.11) + NUL; a WPA2 PSK passphrase is 8..63 chars + NUL.
 // Stored in every build so the flash layout is identical across transports
 // (only the WiFi build reads them).
@@ -158,17 +158,17 @@ struct __attribute__((packed)) Config_body {
     // different fields after the common ancestor) -- field ORDER below is ours
     // alone; never copy upstream's offsets.
     //
-    // Network hostname advertised over mDNS as "<hostname>.local" (and set as
-    // the netif hostname). Defaults to CONFIG_HOSTNAME_DEFAULT; user-editable
-    // so multiple dongles on one LAN don't collide on ds5.local. config_valid()
+    // Network (DHCP) hostname reported to the router. Defaults to
+    // CONFIG_HOSTNAME_DEFAULT; user-editable so multiple dongles on one LAN
+    // are distinguishable in the client list. config_valid()
     // sanitizes it to a valid DNS label and re-defaults if empty.
     char hostname[CONFIG_HOSTNAME_LEN];
-    // Home-WLAN credentials (WiFi onboarding). wifi_provisioned: 0 = no creds
-    // -> AP + captive portal; 1 = creds set -> STA join. wifi_ssid is NOT
+    // Home-WLAN credentials (Wake-on-LAN uplink). wifi_provisioned: 0 = no
+    // creds -> WiFi idle; 1 = creds set -> STA join. wifi_ssid is NOT
     // necessarily a DNS label, so it is NUL-terminated and length-bounded but
     // not otherwise sanitized; the PSK is stored verbatim. config_valid()
     // forces termination and clears wifi_provisioned if the SSID is empty.
-    // NEVER emitted back to the web UI in cleartext (the portal only ever
+    // NEVER emitted back to the config page in cleartext (it only ever
     // writes them).
     uint8_t wifi_provisioned;            // bool: 0 = onboard via AP, 1 = STA creds set
     char    wifi_ssid[CONFIG_WIFI_SSID_LEN];

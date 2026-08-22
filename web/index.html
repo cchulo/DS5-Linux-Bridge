@@ -307,16 +307,16 @@ footer .kofi:hover{text-decoration:none;opacity:.9}
     <button id="wifi_save" type="button">Save WiFi &amp; restart</button>
     <span id="wstatus"></span>
   </div>
+  <div class="hint" id="wifi_state" style="margin-top:.4rem"></div>
 </div>
 
 <div class="field">
   <label class="lbl" for="hostname">Device name</label>
   <input id="hostname" maxlength="10" autocomplete="off" spellcheck="false"
          placeholder="ds5">
-  <div class="hint">The adapter's network name (what your router shows, and
-  <b>&lt;name&gt;.local</b> over mDNS). Lowercase letters, digits and hyphens,
-  up to 10 characters — anything else is dropped on save. Give each adapter its
-  own name if you have several. Takes effect after the adapter restarts.</div>
+  <div class="hint">The adapter's network name (what your router's client list
+  shows). Lowercase letters, digits and hyphens, up to 10 characters — anything
+  else is dropped on save. Takes effect after the adapter restarts.</div>
 </div>
 
 <div class="field">
@@ -902,6 +902,7 @@ async function loadStatus(){
     lastSlots=d;
     const card=$('statuscard');card.innerHTML='';
     card.className=d.connected>0?'on':'';
+    if(d.wifi!==undefined)$('wifi_state').textContent='WiFi status: '+d.wifi;
     (d.slots||[]).forEach(s=>card.appendChild(slotRow(d,s)));
     if(d.led){
       $('led_dbg').style.display='';

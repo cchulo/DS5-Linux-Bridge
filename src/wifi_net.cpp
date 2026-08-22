@@ -1,5 +1,8 @@
 //
-// wifi_net.cpp -- onboard CYW43 Wi-Fi (STA) transport: config web UI + WOL.
+// wifi_net.cpp -- onboard CYW43 Wi-Fi (STA) uplink for Wake-on-LAN ONLY.
+// Configuration happens over USB (hid_config.cpp); there is no web server,
+// no mDNS and no captive portal. Credentials arrive via POST
+// /api/wifi_provision on the USB config page.
 //
 // Ported from kungaa/DS5-Linux-Bridge (see wifi_net.h for the migration note).
 // The single CYW43 radio carries BT (Opus audio, latency-critical) AND WiFi
@@ -29,7 +32,6 @@
 
 #include "pico/cyw43_arch.h"
 #include "pico/time.h"
-#include "pico/unique_id.h"
 
 #include "hardware/watchdog.h"
 
@@ -38,13 +40,8 @@
 #include "lwip/dhcp.h"
 #include "lwip/etharp.h"
 #include "lwip/udp.h"
-#include "lwip/apps/mdns.h"
-
-#include "dhcpserver.h"
-#include "dnsserver.h"
 
 #include "config.h"
-#include "web_api.h"
 
 // The CYW43 STA netif, addressed explicitly (see the header note).
 static struct netif *sta_netif() { return &cyw43_state.netif[CYW43_ITF_STA]; }
@@ -93,7 +90,7 @@ static bool mac_is_zero(const uint8_t mac[6]) {
 // targets. Returns true if at least one packet was sent. Skips silently in AP
 // onboarding mode (no LAN uplink -- the caller usually gates this too).
 bool wifi_wol_send_all(void) {
-    if (wifi_net_in_ap_mode() || sta_idle) return false; // no LAN uplink
+    if (sta_idle) return false; // no LAN uplink
     const Config_body &c = get_config();
     const uint8_t *targets[2] = { c.wol_target_mac, c.wol_target_mac2 };
     bool any = false;
@@ -170,42 +167,25 @@ int wifi_resolve_mac_poll_result(uint8_t out_mac[6]) {
 // until then). wake.cpp owns WHEN (and the once-per-spell rate-limit); this
 // just emits to the configured targets. Returns true if a packet was sent.
 extern "C" bool wake_emit_wol(void) {
-    // No LAN in onboarding mode -- the SoftAP carries only the local portal, so
-    // a magic packet has nowhere to go. (wifi_wol_send_all() re-checks this too.)
-    if (wifi_net_in_ap_mode() || sta_idle) return false;
+    // No LAN while unprovisioned. (wifi_wol_send_all() re-checks this too.)
+    if (sta_idle) return false;
     // Wake every configured target (PC + optional 2nd, e.g. a TV).
     return wifi_wol_send_all();
 }
 
 //--------------------------------------------------------------------+
-// Mode + state
+// Link state (for the USB config page's Network tab)
 //--------------------------------------------------------------------+
 
-// Two mutually-exclusive runtime modes (never both -- a device is either
-// onboarding or operating):
-//   STA: provisioned, joined the home WLAN, config page + WOL (normal use).
-//   AP : unprovisioned (or forced), SoftAP + captive portal (onboarding).
-static bool in_ap_mode = false;
-static bool force_ap = false;          // set by wifi_net_request_ap_onboarding()
-static bool wifi_mdns_added = false;   // STA: mDNS netif registered once
+static const char *wifi_state = "off";
+static char wifi_state_detail[24] = "";
 
-// AP-mode IP plan: network 10.55.55.104/29, dongle (gateway) at 10.55.55.105,
-// DHCP hands clients .106-.110 (see dhcpserver.h DHCPS_BASE_IP/DHCPS_MAX_IP,
-// tuned to this /29). The /29 caps the pool at 5 client slots so nobody can
-// cram a crowd of stations onto the single radio and starve BT/audio. The DNS
-// server answers every lookup with .105 so the captive-portal sheet pops on the
-// phone. (Historical note: the same 10.55.55.x was the NCM-era default, so
-// docs and muscle memory carry over.)
-#define AP_GW_A 10
-#define AP_GW_B 55
-#define AP_GW_C 55
-#define AP_GW_D 105
-
-static dhcp_server_t ap_dhcp;
-static dns_server_t  ap_dns;
-
-bool wifi_net_in_ap_mode() { return in_ap_mode; }
-void wifi_net_request_ap_onboarding() { force_ap = true; }
+const char *wifi_net_state(void) {
+    static char buf[40];
+    if (wifi_state_detail[0]) snprintf(buf, sizeof(buf), "%s %s", wifi_state, wifi_state_detail);
+    else snprintf(buf, sizeof(buf), "%s", wifi_state);
+    return buf;
+}
 
 //--------------------------------------------------------------------+
 // STA: join the home WLAN (non-blocking)
@@ -236,20 +216,12 @@ static void wifi_sta_init(void) {
     // driver, BT, and lwIP together. We do NOT lwip_init() here.)
     cyw43_arch_enable_sta_mode();
 
-    // Network hostname advertised as "<hostname>.local". User-set in config so
-    // multiple dongles on one LAN don't collide on ds5.local. config_valid()
-    // has already sanitized it to a valid DNS label (and defaulted it if empty),
-    // so it's safe to use verbatim.
+    // DHCP hostname (what the router's client list shows). User-set in config
+    // so multiple dongles are distinguishable; config_valid() has already
+    // sanitized it to a valid DNS label (and defaulted it if empty).
     const char *hostname = get_config().hostname;
 #if LWIP_NETIF_HOSTNAME
     netif_set_hostname(sta_netif(), hostname);
-#endif
-
-#if LWIP_MDNS_RESPONDER
-    // The mDNS responder can be initialised now; the per-netif registration that
-    // actually advertises "<hostname>.local" is deferred to wifi_net_task() once
-    // the link is up (adding a netif before it has a link/IP is pointless).
-    mdns_resp_init();
 #endif
 
     // Kick off the join asynchronously and return immediately -- do NOT block
@@ -257,177 +229,8 @@ static void wifi_sta_init(void) {
     // init; wifi_net_task() drives the join to completion and retries on failure.
     wifi_start_join();
 
-    printf("[wifi] STA transport starting (http://%s.local/ once a lease lands)\n", hostname);
-}
-
-//--------------------------------------------------------------------+
-// AP: SoftAP + captive portal for onboarding
-//--------------------------------------------------------------------+
-
-// "DS5-Setup-XXXX" where XXXX is the last 2 bytes of the board unique id, so
-// multiple dongles being set up in the same room have distinct AP names.
-static char ap_ssid[20];
-static void build_ap_ssid(void) {
-    pico_unique_board_id_t uid;
-    pico_get_unique_board_id(&uid);
-    snprintf(ap_ssid, sizeof(ap_ssid), "DS5-Setup-%02X%02X",
-             uid.id[PICO_UNIQUE_BOARD_ID_SIZE_BYTES - 2],
-             uid.id[PICO_UNIQUE_BOARD_ID_SIZE_BYTES - 1]);
-}
-
-// Setup-AP password. Deliberately NOT secret -- it's printed in the docs, the
-// config page and the UART log; WPA2 here is a doorman, not a vault. It keeps
-// drive-by devices and neighbors from auto-joining an open network (and
-// keeps the portal traffic encrypted); the API allowlist in AP mode remains
-// the real guard on what a joined client can do. Overridable at configure
-// time (CMake WIFI_SETUP_PSK); must be 8..63 chars (WPA2).
-#ifndef WIFI_AP_SETUP_PSK
-#define WIFI_AP_SETUP_PSK "dualsense"
-#endif
-static_assert(sizeof(WIFI_AP_SETUP_PSK) - 1 >= 8,
-              "WPA2 passphrase must be at least 8 characters");
-static_assert(sizeof(WIFI_AP_SETUP_PSK) - 1 <= 63,
-              "WPA2 passphrase must be at most 63 characters");
-
-static void wifi_ap_init(void) {
-    in_ap_mode = true;
-    build_ap_ssid();
-
-    // WPA2 with the fixed, documented password above. (Upstream ships this AP
-    // open; we diverge -- see the password comment.) The captive-portal
-    // sign-in sheet still pops after joining: detection is HTTP-probe based,
-    // independent of the network's auth.
-    cyw43_arch_enable_ap_mode(ap_ssid, WIFI_AP_SETUP_PSK, CYW43_AUTH_WPA2_AES_PSK);
-
-    // Give the AP netif a fixed address. Address it explicitly via
-    // cyw43_state.netif[CYW43_ITF_AP] rather than netif_default: the SDK sets
-    // netif_default per-netif and in a mixed setup it may point at the STA netif,
-    // so relying on it here is fragile (this is also what the pico-examples AP
-    // demo does).
-    ip4_addr_t gw, mask;
-    IP4_ADDR(&gw, AP_GW_A, AP_GW_B, AP_GW_C, AP_GW_D);
-    // /29 (255.255.255.248): 8 addresses .104-.111, usable hosts .105-.110.
-    // Gateway/dongle at .105, DHCP pool .106-.110 (see dhcpserver.h). Small on
-    // purpose -- 5 client slots max on the single BT/WiFi radio.
-    IP4_ADDR(&mask, 255, 255, 255, 248);
-    struct netif *apn = &cyw43_state.netif[CYW43_ITF_AP];
-    netif_set_addr(apn, &gw, &mask, &gw);
-    // Force broadcast routing out the AP netif. The DHCP server replies to
-    // 255.255.255.255 (the client has no IP yet); lwIP routes a global broadcast
-    // via netif_default. With both the STA netif (created by cyw43_arch_init even
-    // though we never joined) and the AP netif present, netif_default can be the
-    // wrong (STA, link-down) interface -> the ACK never reaches the client and it
-    // loops REQUEST forever. Pinning default to the AP netif fixes egress for the
-    // DHCP + DNS replies.
-    netif_set_default(apn);
-
-    // DHCP + DNS servers so a phone gets a lease and every lookup resolves to us
-    // (captive-portal detection -> the OS pops the "Sign in" sheet).
-    dhcp_server_init(&ap_dhcp, &gw, &mask);
-    dns_server_init(&ap_dns, &gw);
-
-    printf("[wifi] AP onboarding: join \"%s\" (password \"%s\") then browse to http://%u.%u.%u.%u/\n",
-           ap_ssid, WIFI_AP_SETUP_PSK, AP_GW_A, AP_GW_B, AP_GW_C, AP_GW_D);
-}
-
-//--------------------------------------------------------------------+
-// WiFi scan (AP mode, for the portal's network dropdown)
-//--------------------------------------------------------------------+
-
-#define SCAN_MAX 16
-struct ScanEntry {
-    char ssid[33];
-    int16_t rssi;
-    uint8_t secure;
-};
-static ScanEntry scan_list[SCAN_MAX];
-static int scan_count = 0;
-static bool scan_in_progress = false;
-static bool scan_ever_started = false;   // has a scan ever been kicked off?
-static absolute_time_t scan_min_next = {0}; // earliest a NEW scan may start (rate-limit)
-
-// Driver callback (cyw43 poll context). De-dup by SSID, keep the strongest RSSI.
-static int scan_result_cb(void *env, const cyw43_ev_scan_result_t *r) {
-    (void) env;
-    if (!r || r->ssid_len == 0 || r->ssid_len > 32) return 0; // skip hidden/garbage
-    char ssid[33];
-    memcpy(ssid, r->ssid, r->ssid_len);
-    ssid[r->ssid_len] = '\0';
-
-    for (int i = 0; i < scan_count; i++) {
-        if (strcmp(scan_list[i].ssid, ssid) == 0) {
-            if (r->rssi > scan_list[i].rssi) scan_list[i].rssi = r->rssi;
-            return 0; // already have it
-        }
-    }
-    if (scan_count < SCAN_MAX) {
-        strcpy(scan_list[scan_count].ssid, ssid);
-        scan_list[scan_count].rssi = r->rssi;
-        scan_list[scan_count].secure = (r->auth_mode != 0) ? 1 : 0;
-        scan_count++;
-    }
-    return 0;
-}
-
-// Kick off a scan, but only when appropriate. The portal polls GET
-// /api/wifi_scan repeatedly to refresh the dropdown while a scan runs; calling
-// this on every poll would RESTART the scan each time -> "scanning" never
-// goes false -> the page polls forever and the list flickers. Guards:
-//   - only one scan at a time (scan_in_progress / cyw43_wifi_scan_active);
-//   - a NEW scan may only begin after scan_min_next (rate-limit ~8s), so a busy
-//     poll loop can't re-trigger back-to-back scans;
-//   - results ACCUMULATE across scans (no scan_count reset) so the dropdown is
-//     stable and only grows; the dedup in scan_result_cb keeps it clean.
-// The very first call auto-starts (portal just loaded); later calls are the
-// rate-limited refresh / the rescan button.
-void wifi_scan_start(void) {
-    if (!in_ap_mode) return;            // scan only matters during onboarding
-    if (scan_in_progress) return;
-    if (cyw43_wifi_scan_active(&cyw43_state)) return;
-    if (scan_ever_started && !time_reached(scan_min_next)) return; // rate-limit
-    cyw43_wifi_scan_options_t opts = {0};
-    if (cyw43_wifi_scan(&cyw43_state, &opts, NULL, scan_result_cb) == 0) {
-        scan_in_progress = true;
-        scan_ever_started = true;
-        scan_min_next = make_timeout_time_ms(8000);
-        printf("[wifi] scan started\n");
-    }
-}
-
-// JSON array of networks for the portal, strongest first.
-int wifi_scan_json(char *out, int cap) {
-    // Insertion sort by RSSI desc (tiny list).
-    for (int i = 1; i < scan_count; i++) {
-        ScanEntry e = scan_list[i];
-        int j = i - 1;
-        while (j >= 0 && scan_list[j].rssi < e.rssi) {
-            scan_list[j + 1] = scan_list[j];
-            j--;
-        }
-        scan_list[j + 1] = e;
-    }
-    int w = snprintf(out, cap, "{\"scanning\":%s,\"nets\":[",
-                     scan_in_progress ? "true" : "false");
-    for (int i = 0; i < scan_count; i++) {
-        // Bound this entry's worst-case serialized length so we never emit a
-        // half-written network: SSID up to 2x (every byte escaped) + the fixed
-        // {"ssid":""..."rssi":-nnn,"secure":n} scaffolding + the "," separator,
-        // and leave room for the closing "]}". If it wouldn't fit, stop here --
-        // the list is sorted strongest-first, so we keep the networks the user
-        // most likely wants and still close the JSON cleanly.
-        int need = 1 /*,*/ + 10 /*{"ssid":"*/ + 2 * (int)strlen(scan_list[i].ssid) +
-                   1 /*"*/ + 34 /*,"rssi":-nnn,"secure":n}*/ + 2 /*]}*/;
-        if (w + need > cap) break;
-        w += snprintf(out + w, cap - w, "%s{\"ssid\":\"", i ? "," : "");
-        for (const char *p = scan_list[i].ssid; *p; p++) {
-            if (*p == '"' || *p == '\\') out[w++] = '\\';
-            out[w++] = *p;
-        }
-        w += snprintf(out + w, cap - w, "\",\"rssi\":%d,\"secure\":%u}",
-                      scan_list[i].rssi, scan_list[i].secure);
-    }
-    w += snprintf(out + w, cap - w, "]}");
-    return w;
+    wifi_state = "joining";
+    printf("[wifi] STA uplink starting (hostname \"%s\")\n", hostname);
 }
 
 //--------------------------------------------------------------------+
@@ -458,8 +261,8 @@ bool wifi_provision_apply(const char *ssid, const char *psk) {
     watchdog_update();        // sector erase blocks with interrupts off
     if (!config_save()) return false;
     printf("[wifi] provisioned SSID \"%s\"; rebooting into STA mode\n", ssid);
-    // Defer the reboot a beat so the HTTP "saved" response can flush to the
-    // phone before the watchdog resets us. wifi_net_task() fires it.
+    // Defer the reboot a beat so the config page gets its "saved" reply
+    // before the watchdog resets us. wifi_net_task() fires it.
     wifi_schedule_reboot(1200);
     return true;
 }
@@ -468,7 +271,7 @@ bool wifi_reset_provisioning_apply() {
     config_set_wifi_creds("", "");
     watchdog_update();
     if (!config_save()) return false;
-    printf("[wifi] WiFi credentials cleared; rebooting to AP onboarding\n");
+    printf("[wifi] WiFi credentials cleared; rebooting with WiFi off\n");
     wifi_schedule_reboot(1200);
     return true;
 }
@@ -478,21 +281,17 @@ bool wifi_reset_provisioning_apply() {
 //--------------------------------------------------------------------+
 
 void wifi_net_init() {
-    const bool provisioned = get_config().wifi_provisioned;
-    if (force_ap) {
-        wifi_ap_init();       // onboarding portal (only when explicitly forced)
-    } else if (!provisioned) {
-        // No credentials yet: stay a plain dongle (BT + USB up, WiFi half of
-        // the radio idle). Credentials are entered on the config page over
-        // USB (hid_config.cpp -> POST /api/wifi_provision), which persists
-        // them and reboots into STA. The AP captive portal is no longer the
-        // onboarding path, so an unprovisioned dongle never loses BT.
+    if (!get_config().wifi_provisioned) {
+        // No credentials: stay a plain dongle (BT + USB up, WiFi half of the
+        // radio idle). Credentials are entered on the USB config page
+        // (hid_config.cpp -> POST /api/wifi_provision), which persists them
+        // and reboots into STA.
         sta_idle = true;
-        printf("[wifi] unprovisioned: WiFi idle (set credentials from the config page over USB)\n");
-    } else {
-        wifi_sta_init();      // normal operation (WOL uplink)
+        wifi_state = "off";
+        printf("[wifi] unprovisioned: WiFi idle (set a network on the config page)\n");
+        return;
     }
-    web_api_init(); // idempotent; serves portal (AP) or config page (STA)
+    wifi_sta_init(); // WOL uplink
 }
 
 void wifi_net_task() {
@@ -500,21 +299,11 @@ void wifi_net_task() {
     // cyw43_arch_poll()).
     sys_check_timeouts();
 
-    // Provisioning/reset reboots are deferred so the HTTP response can flush
-    // before the watchdog reset. This must work from AP onboarding and from the
-    // normal STA config page.
+    // Provisioning/reset reboots are deferred so the config page gets its
+    // reply before the watchdog reset.
     if (reboot_pending && time_reached(reboot_at)) {
         watchdog_reboot(0, 0, 0);
         return;
-    }
-
-    if (in_ap_mode) {
-        // Track scan completion so the portal can stop polling.
-        if (scan_in_progress && !cyw43_wifi_scan_active(&cyw43_state)) {
-            scan_in_progress = false;
-            printf("[wifi] scan done (%d networks)\n", scan_count);
-        }
-        return; // no STA link tracking / WOL while onboarding
     }
 
     // Unprovisioned: no STA netif exists, so there is no link to supervise,
@@ -580,39 +369,37 @@ void wifi_net_task() {
     if (link == CYW43_LINK_UP &&
         !ip4_addr_isany_val(*netif_ip4_addr(sta_netif()))) {
         ever_connected = true;
-#if LWIP_MDNS_RESPONDER
-        // Advertise "<hostname>.local" now that we have a link + IP. Done once.
-        if (!wifi_mdns_added) {
-            mdns_resp_add_netif(sta_netif(), get_config().hostname);
-            wifi_mdns_added = true;
-        }
-#endif
+        wifi_state = "up";
+        snprintf(wifi_state_detail, sizeof(wifi_state_detail), "%s",
+                 ip4addr_ntoa(netif_ip4_addr(sta_netif())));
         if (!reported_ip) {
-            printf("[wifi] IP %s -- http://%s/ (or http://%s.local/)\n",
-                   ip4addr_ntoa(netif_ip4_addr(sta_netif())),
-                   ip4addr_ntoa(netif_ip4_addr(sta_netif())),
-                   get_config().hostname);
+            printf("[wifi] IP %s (WOL uplink ready)\n",
+                   ip4addr_ntoa(netif_ip4_addr(sta_netif())));
             reported_ip = true;
         }
     } else if (link == CYW43_LINK_DOWN || link == CYW43_LINK_FAIL ||
                link == CYW43_LINK_NONET || link == CYW43_LINK_BADAUTH) {
         reported_ip = false;
+        wifi_state_detail[0] = '\0';
 
-        // Give up -> re-onboard ONLY if we've never connected this boot AND
-        // either the password is clearly wrong (BADAUTH twice) or the budget ran
-        // out. A device that connected before keeps retrying forever instead.
+        // Give up for this boot ONLY if we've never connected AND either the
+        // password is clearly wrong (BADAUTH twice) or the budget ran out --
+        // stop hammering the shared radio and report it on the config page
+        // (credentials are KEPT; the user fixes them over USB or the next
+        // boot retries). A device that connected before keeps retrying
+        // forever instead, since a real network blip should self-heal.
+        static bool gave_up = false;
+        if (gave_up) return;
         if (!ever_connected &&
             (badauth_seen >= 2 || time_reached(verify_deadline))) {
-            printf("[wifi] join failed (%s) -- clearing creds, rebooting to AP onboarding\n",
-                   badauth_seen >= 2 ? "bad password" : "timeout");
-            // Clear provisioning so the next boot comes up in AP + portal.
-            config_set_wifi_creds("", "");
-            watchdog_update();
-            config_save();
-            sleep_ms(150); // let UART flush
-            watchdog_reboot(0, 0, 0);
+            const bool badpw = badauth_seen >= 2;
+            printf("[wifi] join failed (%s) -- giving up until next boot\n",
+                   badpw ? "bad password" : "timeout");
+            wifi_state = badpw ? "failed (bad password)" : "failed (no connection)";
+            gave_up = true;
             return;
         }
+        wifi_state = ever_connected ? "reconnecting" : "joining";
 
         // Otherwise retry the join (async, non-blocking) on a slow cadence so a
         // flaky router eventually associates without ever stalling the main loop.

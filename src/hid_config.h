@@ -51,7 +51,6 @@
 #define HID_CFG_ST_NO_SESSION 3
 #define HID_CFG_ST_TOO_BIG    4
 
-#ifdef ENABLE_WIFI_WOL
 // SET_REPORT 0x80 on slot 0's interface. Returns true if the report was a
 // tunnel command (magic matched) and has been consumed; false = not ours,
 // caller passes it through to the controller as before. `buf`/`len` exclude
@@ -62,10 +61,5 @@ bool hid_config_set_report(const uint8_t *buf, uint16_t len);
 bool hid_config_armed(void);
 // GET_REPORT 0x81: copy the prepared reply. Returns bytes written.
 uint16_t hid_config_get_report(uint8_t *buf, uint16_t reqlen);
-#else
-static inline bool hid_config_set_report(const uint8_t *, uint16_t) { return false; }
-static inline bool hid_config_armed(void) { return false; }
-static inline uint16_t hid_config_get_report(uint8_t *, uint16_t) { return 0; }
-#endif
 
 #endif // DS5_BRIDGE_HID_CONFIG_H
