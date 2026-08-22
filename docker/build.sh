@@ -33,11 +33,20 @@ if ! docker image inspect "${IMAGE}" >/dev/null 2>&1; then
 fi
 
 BUILD_DIR="build/docker-${BUILD_NAME:-${VARIANT}}"
+# Every project option is UNSET in the cache before this invocation's flags
+# are applied, so a build is fully determined by its command line. Without
+# this, a one-off "-DENABLE_WIFI_WOL=OFF" test build silently stuck in the
+# cache and every later default build shipped without WiFi/wake (2026-08-22).
+RESET_OPTS="-UENABLE_WIFI_WOL -UENABLE_WAKE_HID -UENABLE_LED_STRIP -ULED_STRIP_GPIO \
+ -UENABLE_POWER_PIN -UPOWER_PIN_GPIO -UMULTI_SLOT_COUNT -UENABLE_VERBOSE \
+ -UENABLE_BATT_LED -UDISABLE_SPEAKER_PROC -UPICO_W_BUILD -UWAVESHARE_RP2350B_PLUS_W_BUILD \
+ -UVERSION"
 docker run --rm -v "${REPO_DIR}:/work" -w /work "${IMAGE}" bash -c "
     set -euo pipefail
-    cmake -S . -B '${BUILD_DIR}' -G Ninja -DCMAKE_BUILD_TYPE=Release ${CMAKE_FLAGS} $*
+    cmake -S . -B '${BUILD_DIR}' -G Ninja -DCMAKE_BUILD_TYPE=Release ${RESET_OPTS} ${CMAKE_FLAGS} $*
     cmake --build '${BUILD_DIR}'
 "
+echo ">> options: $(grep -E '^(ENABLE_WIFI_WOL|ENABLE_WAKE_HID|ENABLE_LED_STRIP|MULTI_SLOT_COUNT):' "${REPO_DIR}/${BUILD_DIR}/CMakeCache.txt" | sed 's/:[A-Z]*=/=/' | tr '\n' ' ')"
 STAMPED="$(ls "${REPO_DIR}/${BUILD_DIR}"/ds5-bridge-[0-9]*.uf2 2>/dev/null | head -1 || true)"
 echo ">> done: ${BUILD_DIR}/ds5-bridge.uf2"
 if [ -n "${STAMPED}" ]; then
