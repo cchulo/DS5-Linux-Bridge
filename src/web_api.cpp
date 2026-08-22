@@ -21,6 +21,7 @@
 #include "pico/time.h"
 
 #include "bt.h"
+#include "state_mgr.h"
 #include "tier.h"
 #include "usb.h"
 #ifdef ENABLE_LED_STRIP
@@ -58,6 +59,7 @@ static int json_config(char *out, size_t cap) {
                     "{\"version\":\"%s\","
                     "\"inactive_time\":%u,"
                     "\"disable_inactive_disconnect\":%u,"
+                    "\"mute_speaker\":%u,"
                     "\"disable_pico_led\":%u,"
                     "\"polling_rate_mode\":%u,"
                     "\"audio_buffer_length\":%u,"
@@ -89,6 +91,7 @@ static int json_config(char *out, size_t cap) {
                     PICO_PROGRAM_VERSION_STRING,
                     c.inactive_time,
                     c.disable_inactive_disconnect,
+                    c.mute_speaker,
                     c.disable_pico_led,
                     c.polling_rate_mode,
                     c.audio_buffer_length,
@@ -475,6 +478,8 @@ static void apply_post(char *body) {
             url_decode(eq);
             strncpy(c.hostname, eq, CONFIG_HOSTNAME_LEN - 1);
             c.hostname[CONFIG_HOSTNAME_LEN - 1] = '\0';
+        } else if (strcmp(tok, "mute_speaker") == 0) {
+            c.mute_speaker = val ? 1 : 0;
         } else if (strcmp(tok, "disable_player_led_lock") == 0) {
             c.disable_player_led_lock = val ? 1 : 0;
         } else if (strcmp(tok, "disable_lightbar_override") == 0) {
@@ -574,8 +579,10 @@ static void apply_post(char *body) {
 
     const bool lock_was_disabled = get_config().disable_player_led_lock;
     set_config(c); // validates + stores in RAM
-    // Slot colors take effect immediately: re-apply to every connected pad's
-    // lightbar (the strip reads the config directly each frame).
+    // Speaker mute + slot colors take effect immediately: re-pin every
+    // seat's state, then push it to each connected pad (the strip reads the
+    // config directly each frame).
+    for (uint8_t i = 0; i < BT_MAX_SLOTS; i++) state_apply_speaker_mute(i);
     bt_slot_colors_refresh();
     // Enabling the player-LED lock takes effect immediately too: re-pin every
     // connected pad's slot pattern (no-op unless 2+ pads are connected).

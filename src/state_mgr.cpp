@@ -19,6 +19,7 @@ namespace {
     constexpr size_t kHapticLowPassFilterOffset = offsetof(SetStateData, LightFadeAnimation) - 2 * sizeof(uint8_t);
     constexpr size_t kPlayerIndicatorsOffset = offsetof(SetStateData, LedRed) - sizeof(uint8_t);
     constexpr size_t kLedColorOffset = offsetof(SetStateData, LedRed);
+    constexpr size_t kVolumeSpeakerOffset = offsetof(SetStateData, VolumeSpeaker);
 }
 
 static constexpr uint8_t state_init_data[63] = {
@@ -105,9 +106,20 @@ void state_apply_slot_color(uint8_t slot) {
 #endif
 }
 
+// Speaker mute (config mute_speaker): pin the pad's speaker volume to 0 (or
+// restore the stock level). Host writes never reach this byte (the
+// VolumeSpeaker copy in state_update is disabled), so the pinned value
+// sticks until the config changes. Headphones/mic/haptics untouched.
+void state_apply_speaker_mute(uint8_t slot) {
+    if (slot >= BT_MAX_SLOTS) return;
+    state[slot][kVolumeSpeakerOffset] =
+        get_config().mute_speaker ? 0 : state_init_data[kVolumeSpeakerOffset];
+}
+
 void state_slot_reset(uint8_t slot) {
     if (slot >= BT_MAX_SLOTS) return;
     memcpy(state[slot], state_init_data, sizeof(state_init_data));
+    state_apply_speaker_mute(slot);
 #if BT_MAX_SLOTS > 1
     state_apply_slot_color(slot);
     state[slot][kPlayerIndicatorsOffset] = slot_player_leds[slot];

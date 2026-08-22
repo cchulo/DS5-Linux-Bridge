@@ -192,6 +192,10 @@ struct __attribute__((packed)) Config_body {
     // Battery-warning colors. All-zero = unset -> yellow / red.
     uint8_t lowbatt_rgb[3];
     uint8_t critbatt_rgb[3];
+    // Mute the controller's built-in speaker: its SetState speaker volume is
+    // pinned to 0 (headphone jack, mic and haptics unaffected). 0 = speaker
+    // on (default/migrated), 1 = muted. Web UI toggle in Controller.
+    uint8_t mute_speaker;
 };
 
 struct __attribute__((packed)) Config {

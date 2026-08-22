@@ -98,6 +98,7 @@ static_assert(offsetof(Config_body, led_anim) == 427);
 static_assert(offsetof(Config_body, empty_rgb) == 433);
 static_assert(offsetof(Config_body, lowbatt_rgb) == 436);
 static_assert(offsetof(Config_body, critbatt_rgb) == 439);
+static_assert(offsetof(Config_body, mute_speaker) == 442);
 static_assert(sizeof(Config_body) <= 448); // keep well inside the 512 B store
 
 // CRC over the first `len` bytes of the body. `len` is the stored size, so an
@@ -261,6 +262,7 @@ void config_valid() {
       body->critbatt_rgb[2] == 0) {
     body->critbatt_rgb[0] = 0xff;
   }
+  if (body->mute_speaker > 1) body->mute_speaker = 0;
   // lightbar_filter_rgb needs no check: every value is valid, and the all-zero
   // default (black) is itself the intended out-of-box filter color.
   // Legacy in-body version byte, kept in sync with the header for compatibility

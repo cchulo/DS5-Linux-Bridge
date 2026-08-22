@@ -25,6 +25,9 @@ void state_update(uint8_t slot, const uint8_t *data, uint8_t size);
 // (config slot_rgb). Multi-slot builds only; no-op otherwise. Called from
 // state_slot_reset and when the user edits slot colors in the web UI.
 void state_apply_slot_color(uint8_t slot);
+// Re-pin the slot's speaker volume from config mute_speaker (0 when muted,
+// stock level otherwise). Called on slot reset and whenever config changes.
+void state_apply_speaker_mute(uint8_t slot);
 
 // Pin `slot`'s cached player-indicator byte back to its slot pattern
 // (multi-slot builds; no-op otherwise). Part of the player-LED lock.

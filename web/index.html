@@ -136,6 +136,14 @@ footer .kofi:hover{text-decoration:none;opacity:.9}
   <label for="disable_inactive_disconnect">Never auto-disconnect on inactivity</label>
 </div>
 
+<div class="field chk">
+  <input type="checkbox" id="mute_speaker">
+  <label for="mute_speaker">Mute the controller's speaker</label>
+</div>
+<div class="hint">Silences the DualSense's built-in speaker. The headphone
+  jack, microphone and haptics are unaffected, and games still think they are
+  playing sound through it.</div>
+
 </section>
 
 <section class="pane" id="pane_lights">
@@ -477,7 +485,7 @@ function bindRange(id,out){const el=$(id);const fn=()=>$(out).textContent=el.val
 const upd=[bindRange('audio_buffer_length','ab_val'),bindRange('inactive_time','it_val')];
 
 function markDirty(){$('save').disabled=false;setStatus('unsaved changes','dirty')}
-['controller_mode','polling_rate_mode','disable_inactive_disconnect','disable_pico_led','player_led_lock','lightbar_override','lightbar_filter_rgb','idle_rgb','empty_rgb','lowbatt_rgb','critbatt_rgb','anim0','anim1','anim2','anim3','anim4','anim5']
+['controller_mode','polling_rate_mode','disable_inactive_disconnect','mute_speaker','disable_pico_led','player_led_lock','lightbar_override','lightbar_filter_rgb','idle_rgb','empty_rgb','lowbatt_rgb','critbatt_rgb','anim0','anim1','anim2','anim3','anim4','anim5']
   .forEach(id=>$(id).onchange=markDirty);
 ['hostname','wol_mac1','wol_mac2'].forEach(id=>$(id).oninput=markDirty);
 
@@ -504,6 +512,7 @@ async function load(){
     $('audio_buffer_length').value=c.audio_buffer_length;
     $('inactive_time').value=c.inactive_time;
     $('disable_inactive_disconnect').checked=!!c.disable_inactive_disconnect;
+    $('mute_speaker').checked=!!c.mute_speaker;
     $('disable_pico_led').checked=!!c.disable_pico_led;
     $('player_led_lock').checked=!c.disable_player_led_lock;
     $('lightbar_override').checked=!c.disable_lightbar_override;
@@ -550,6 +559,7 @@ async function save(){
     'audio_buffer_length='+$('audio_buffer_length').value,
     'inactive_time='+$('inactive_time').value,
     'disable_inactive_disconnect='+($('disable_inactive_disconnect').checked?1:0),
+    'mute_speaker='+($('mute_speaker').checked?1:0),
     'disable_pico_led='+($('disable_pico_led').checked?1:0),
     'disable_player_led_lock='+($('player_led_lock').checked?0:1),
     'disable_lightbar_override='+($('lightbar_override').checked?0:1),
