@@ -81,13 +81,6 @@ config page, and OS-specific behavior and troubleshooting.
 
 ### Web UI
 
-- **Sleeps during normal play** (latency guard): the page and the
-  `<hostname>.local` mDNS record are only served while the dongle is in
-  **pairing mode** (hold **PS + Create** ~3 s on a connected pad, or use a
-  fresh dongle with nothing bonded yet) and for a ~10-minute grace session
-  after — refreshed while the page is actually in use. Outside that window
-  HTTP requests get a cheap refusal and the dongle stays mDNS-silent, so the
-  WiFi stack does no per-request work on the input hot path.
 - Live **status card**: per-slot connection state, model, battery percentage
   (colored at the same 40%/20% thresholds as the strip), and which features
   are active on each pad at the current tier.

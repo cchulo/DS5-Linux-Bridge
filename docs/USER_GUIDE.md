@@ -78,13 +78,9 @@ click **Pair new controller**. This:
    previous controller is held off during the window so it can't grab the slot
    back before the new one finishes pairing.
 
-> The config page **sleeps during normal play** (it shares the radio and CPU
-> with the controller hot path): it is served only while the adapter is in
-> pairing mode — hold **PS + Create** ~3 s on a connected pad, or have nothing
-> bonded yet — and for a ~10-minute grace session afterwards, refreshed while
-> you're actually using the page. Outside that window the page (and the
-> adapter's `.local` name) simply doesn't answer; re-enter pairing mode to
-> wake it.
+> The config page is reachable whether or not a controller is connected, so you
+> can also reach it (and pair) when the adapter is idle. Note the page may blip
+> briefly as the adapter re-enumerates when a controller joins a new seat.
 
 ---
 

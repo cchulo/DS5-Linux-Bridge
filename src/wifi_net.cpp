@@ -184,8 +184,7 @@ extern "C" bool wake_emit_wol(void) {
 //   AP : unprovisioned (or forced), SoftAP + captive portal (onboarding).
 static bool in_ap_mode = false;
 static bool force_ap = false;          // set by wifi_net_request_ap_onboarding()
-static bool wifi_mdns_added = false;   // STA: mDNS netif currently registered
-                                       // (follows the web access gate)
+static bool wifi_mdns_added = false;   // STA: mDNS netif registered once
 
 // AP-mode IP plan: network 10.55.55.104/29, dongle (gateway) at 10.55.55.105,
 // DHCP hands clients .106-.110 (see dhcpserver.h DHCPS_BASE_IP/DHCPS_MAX_IP,
@@ -566,18 +565,10 @@ void wifi_net_task() {
         !ip4_addr_isany_val(*netif_ip4_addr(sta_netif()))) {
         ever_connected = true;
 #if LWIP_MDNS_RESPONDER
-        // Advertise "<hostname>.local" only while the web UI is reachable
-        // (web access gate: pairing mode + grace session); withdraw the
-        // record when the gate closes so the dongle is mDNS-silent -- and
-        // spends no core0 time answering multicast queries -- in normal play.
-        if (web_api_access_allowed()) {
-            if (!wifi_mdns_added) {
-                mdns_resp_add_netif(sta_netif(), get_config().hostname);
-                wifi_mdns_added = true;
-            }
-        } else if (wifi_mdns_added) {
-            mdns_resp_remove_netif(sta_netif());
-            wifi_mdns_added = false;
+        // Advertise "<hostname>.local" now that we have a link + IP. Done once.
+        if (!wifi_mdns_added) {
+            mdns_resp_add_netif(sta_netif(), get_config().hostname);
+            wifi_mdns_added = true;
         }
 #endif
         if (!reported_ip) {

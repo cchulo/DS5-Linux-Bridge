@@ -50,44 +50,6 @@ static bool wifi_reset_ok;
 static bool last_wol_ok;
 
 //--------------------------------------------------------------------+
-// Web access gate (latency guard)
-//--------------------------------------------------------------------+
-// lwIP's httpd cannot be stopped once started, so the server is gated
-// per-request instead: outside AP onboarding, requests are served only while
-// pairing mode is active (explicit pairing window open, or no controller
-// bonded yet) or during a grace session armed by pairing mode and refreshed
-// by served requests -- so an open config page stays alive, and dies ~10 min
-// after the last request once pairing mode ends. Everything else gets a
-// cheap refusal with no page/JSON work, and wifi_net.cpp withdraws the mDNS
-// "<hostname>.local" record while the gate is closed, so in normal play the
-// dongle spends no core0 time serving HTTP (input-latency guard) and is
-// mDNS-invisible on the LAN. Pairing mode is enterable without the web UI:
-// hold PS+Create ~3 s on a connected controller (main.cpp).
-static constexpr uint64_t WEB_SESSION_US = 10ull * 60 * 1000 * 1000; // 10 min
-static uint64_t web_session_until_us = 0;
-
-bool web_api_access_allowed() {
-    const uint64_t now = time_us_64();
-#ifdef ENABLE_WIFI_WOL
-    if (wifi_net_in_ap_mode()) return true;
-#endif
-    if (bt_pairing_mode_active()) {
-        web_session_until_us = now + WEB_SESSION_US;
-        return true;
-    }
-    return now < web_session_until_us;
-}
-
-// A request was actually served while the gate was open: keep the session
-// alive so an active config-page visit doesn't expire mid-edit. (An open
-// tab's status poll counts as activity; closing the tab lets the session
-// lapse.)
-static void web_session_touch() {
-    const uint64_t until = time_us_64() + WEB_SESSION_US;
-    if (until > web_session_until_us) web_session_until_us = until;
-}
-
-//--------------------------------------------------------------------+
 // HTTP content: / (page), /api/config -- via fs_open_custom
 //--------------------------------------------------------------------+
 
@@ -388,15 +350,6 @@ extern "C" int fs_open_custom(struct fs_file *file, const char *name) {
         }
     }
 #endif
-    if (!web_api_access_allowed()) {
-        // Gate closed (normal play): cheap refusal, no page/JSON work. The
-        // hint tells a user who bookmarked the page how to reopen it.
-        static const char gated[] =
-            "web UI is sleeping. Hold PS+Create ~3s on a connected controller "
-            "(or re-enter pairing mode) to wake it.";
-        return make_file(file, "404 Not Found", "text/plain", gated, sizeof(gated) - 1);
-    }
-    web_session_touch();
     if (strcmp(name, "/") == 0 || strcmp(name, "/index.html") == 0) {
         // Serve the page straight from flash (headers included) -- zero heap.
         memset(file, 0, sizeof(*file));
@@ -1021,10 +974,6 @@ extern "C" err_t httpd_post_begin(void *connection, const char *uri, const char 
     (void) response_uri;
     (void) response_uri_len;
     (void) post_auto_wnd;
-    // Web access gate: refuse everything while closed (AP onboarding and
-    // pairing mode pass; see web_api_access_allowed).
-    if (!web_api_access_allowed()) return ERR_VAL;
-    web_session_touch();
     post_target_t target;
     if (strcmp(uri, "/api/config") == 0) target = POST_CONFIG;
     else if (strcmp(uri, "/api/bonds") == 0) target = POST_BONDS;

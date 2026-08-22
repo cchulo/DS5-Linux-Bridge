@@ -346,10 +346,10 @@ endif()
 # confusion the auto stamp exists to prevent.
 # Semver base for this fork. Bump by hand on meaningful milestones.
 # 0.4.0: dynamic exposed-slot enumeration (grow on join, shrink only when the
-#        last pad leaves); web UI gated to pairing mode + 10-min session
-#        (mDNS withdrawn otherwise); LED strip per-state animation/colors
-#        (idle default off, critical keeps blinking); player-LED lock made
-#        reliable (1 Hz re-assert, audio-slot output-report deferral fix).
+#        last pad leaves); LED strip per-state animation/colors (idle default
+#        off, critical keeps blinking); player-LED lock made reliable (1 Hz
+#        re-assert, audio-slot output-report deferral fix). A pairing-gated
+#        web UI shipped briefly and was reverted (broke page access).
 # 0.3.0: Wake-on-LAN -- PS button wakes the PC from S4/S5 via magic packet
 #        (S3 keeps USB remote-wakeup); Network tab gains device name, WOL
 #        targets, Find-MAC and Wake-now.
