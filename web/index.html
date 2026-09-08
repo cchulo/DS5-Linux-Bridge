@@ -444,16 +444,20 @@ function hidRequest(route,body){
 }
 window.fetch=(url,opts)=>hidRequest(String(url),(opts&&opts.body!=null)?String(opts.body):null);
 
-// Gamepad collections (a controller is connected) AND the vendor collection
-// of the idle adapter's dummy HID -- with no pad connected the dongle shows
-// no gamepad at all, and the config tunnel lives on that dummy instead.
-function hidFilters(){return [0x0CE6,0x0DF2].flatMap(p=>[
-  {vendorId:0x054C,productId:p,usagePage:1,usage:5},
-  {vendorId:0x054C,productId:p,usagePage:0xFF00,usage:1}])}
+// Match by VID/PID only -- no usage constraints. The tunnel lives on the
+// gamepad interfaces when a pad is connected and on the idle face's vendor
+// dummy HID when none is, and relying on the browser's usage parsing to
+// tell them apart has proven fragile; hidAttach() instead PINGs every
+// collection the device exposes and keeps whichever answers with the magic
+// (the wake keyboard just fails the probe harmlessly).
+function hidFilters(){return [0x0CE6,0x0DF2].map(p=>({vendorId:0x054C,productId:p}))}
 let appStarted=false;
 async function hidAttach(devs){
-  for(const d of devs){
-    if(!d.collections.some(c=>(c.usagePage===1&&c.usage===5)||c.usagePage===0xFF00))continue;
+  // Try the likeliest collections first (vendor dummy, then gamepad, then
+  // anything else), but probe them all -- the PING magic decides.
+  const score=d=>d.collections.some(c=>c.usagePage===0xFF00)?0
+              :d.collections.some(c=>c.usagePage===1&&c.usage===5)?1:2;
+  for(const d of [...devs].sort((a,b)=>score(a)-score(b))){
     try{
       if(!d.opened)await d.open();
       hid=d;
@@ -464,7 +468,7 @@ async function hidAttach(devs){
       return true;
     }catch(e){hid=null;try{await d.close()}catch(_){}}
   }
-  setHid('no DS5-Linux-Bridge adapter found — pick the "DualSense Wireless Controller" entry','err');
+  setHid('adapter did not answer on any of '+devs.length+' interface(s) — is the firmware 2026-09-08 or newer?','err');
   return false;
 }
 $('hid_connect').onclick=async()=>{
