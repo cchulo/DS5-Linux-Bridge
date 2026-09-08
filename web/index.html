@@ -444,11 +444,16 @@ function hidRequest(route,body){
 }
 window.fetch=(url,opts)=>hidRequest(String(url),(opts&&opts.body!=null)?String(opts.body):null);
 
-function hidFilters(){return [0x0CE6,0x0DF2].map(p=>({vendorId:0x054C,productId:p,usagePage:1,usage:5}))}
+// Gamepad collections (a controller is connected) AND the vendor collection
+// of the idle adapter's dummy HID -- with no pad connected the dongle shows
+// no gamepad at all, and the config tunnel lives on that dummy instead.
+function hidFilters(){return [0x0CE6,0x0DF2].flatMap(p=>[
+  {vendorId:0x054C,productId:p,usagePage:1,usage:5},
+  {vendorId:0x054C,productId:p,usagePage:0xFF00,usage:1}])}
 let appStarted=false;
 async function hidAttach(devs){
   for(const d of devs){
-    if(!d.collections.some(c=>c.usagePage===1&&c.usage===5))continue;
+    if(!d.collections.some(c=>(c.usagePage===1&&c.usage===5)||c.usagePage===0xFF00))continue;
     try{
       if(!d.opened)await d.open();
       hid=d;

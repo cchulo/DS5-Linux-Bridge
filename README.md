@@ -24,13 +24,16 @@ config page, and OS-specific behavior and troubleshooting.
 - Up to **four DualSense / DualSense Edge controllers simultaneously** on one
   dongle. Each pad appears to the host as its own USB gamepad. Seats are
   assigned in session order (lowest free slot), like a PS5.
-- **Grow-as-you-go enumeration** — the dongle enumerates with a single
-  gamepad interface and only re-enumerates (one quick USB bounce) when a
-  controller joins a seat the host hasn't seen yet this session. Disconnects
-  never re-enumerate: a vacated seat stays visible and the next controller
-  silently takes the lowest free one (so if player 1 drops, the next pad to
-  connect *is* player 1). When the last controller leaves, the dongle bounces
-  once back down to a single interface.
+- **Grow-as-you-go enumeration** — with no controllers connected the host
+  sees **no gamepad at all** (no ghost "DualSense" in device lists; just the
+  hidden wake keyboard + config channel). The first controller to connect
+  re-enumerates the dongle (one quick USB bounce) with one gamepad, and
+  another bounce adds an interface whenever a controller joins a seat the
+  host hasn't seen yet this session. Disconnects never re-enumerate: a
+  vacated seat stays visible and the next controller silently takes the
+  lowest free one (so if player 1 drops, the next pad to connect *is*
+  player 1). When the last controller leaves, the dongle bounces once back
+  down to the no-gamepad idle face.
 - **Feature tiers** — rumble and adaptive triggers always work on every pad.
   Controller audio (speaker, HD haptics, microphone) streams only while
   exactly **one** pad is connected; Bluetooth bandwidth can't carry audio for

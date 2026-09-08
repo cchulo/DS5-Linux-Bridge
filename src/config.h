@@ -95,10 +95,10 @@ struct __attribute__((packed)) Config_body {
     uint8_t audio_slot;
     // One-time snapshot of a real controller's bind-time feature reports
     // (calibration 0x05, firmware info 0x20, pairing info 0x09), stored as
-    // cached from BT (leading report-id byte included). The dongle now
-    // enumerates the FULL descriptor from boot, so hid-playstation probes
-    // every gamepad interface before any controller has connected; these
-    // blobs answer those probes. Captured once from the first pad ever
+    // cached from BT (leading report-id byte included). When the descriptor
+    // grows past the connected pads (exposed-slot high-water mark),
+    // hid-playstation probes gamepad interfaces whose pad isn't connected;
+    // these blobs answer those probes. Captured once from the first pad ever
     // paired (single flash write), served forever after.
     uint8_t feature_snapshot_valid;
     uint8_t feature_cal_len;

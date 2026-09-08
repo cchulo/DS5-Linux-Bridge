@@ -134,13 +134,16 @@ enum {
     0x09, 0x21, 0x11, 0x01, 0x00, 0x01, 0x22, 0x2D, 0x00, \
     0x07, 0x05, 0x87, 0x03, 0x08, 0x00, 0x0A
 
-// Inert dummy HID interface used in MINIMAL where the gamepad sits in FULL.
+// Dummy HID interface used in MINIMAL where the gamepad sits in FULL.
 // Holds HID instance 0 so the keyboard stays HID instance 1 across variants
-// (the structural "rogue keyboard on wake" fix). Reuses EP IN 0x84; never
-// written. wDescriptorLength 21 = sizeof(desc_hid_report_dummy). 25 bytes.
+// (the structural "rogue keyboard on wake" fix), and carries the USB config
+// tunnel's 0x80/0x81 feature reports so the config page keeps working while
+// no controller is connected (MINIMAL is the no-pads-connected face).
+// Reuses EP IN 0x84; never written.
+// wDescriptorLength 39 = sizeof(desc_hid_report_dummy). 25 bytes.
 #define DS5_DUMMY_HID_ITF_DESC(dummy_itf) \
     0x09, 0x04, (dummy_itf), 0x00, 0x01, 0x03, 0x00, 0x00, 0x00, \
-    0x09, 0x21, 0x11, 0x01, 0x00, 0x01, 0x22, 0x15, 0x00, \
+    0x09, 0x21, 0x11, 0x01, 0x00, 0x01, 0x22, 0x27, 0x00, \
     0x07, 0x05, 0x84, 0x03, 0x40, 0x00, 0x0A
 
 // Inert padding occupying MINIMAL's interfaces 0..2 so NCM lands on the same
@@ -510,11 +513,13 @@ typedef enum {
     DESC_VARIANT_MINIMAL = 0, // kbd only
     DESC_VARIANT_FULL,        // audio + gamepad + kbd
 } desc_variant_t;
-// The dongle boots and stays in FULL; MINIMAL is retained for a possible
-// future config toggle but nothing requests it anymore. How many gamepad
+// The dongle boots MINIMAL (wake keyboard + config-tunnel dummy; no gamepad,
+// no audio) so the host shows NO controller until one actually connects:
+// the first connect requests FULL (bt.cpp) and the last disconnect requests
+// MINIMAL again, each a single re-enumeration bounce. How many gamepad
 // interfaces FULL carries is dynamic (the exposed-slot high-water mark) --
 // see the exposed-slot orchestrator below.
-static volatile desc_variant_t active_variant = DESC_VARIANT_FULL;
+static volatile desc_variant_t active_variant = DESC_VARIANT_MINIMAL;
 
 void usb_set_descriptor_variant_full(void)    { active_variant = DESC_VARIANT_FULL; }
 void usb_set_descriptor_variant_minimal(void) { active_variant = DESC_VARIANT_MINIMAL; }
@@ -561,7 +566,7 @@ uint8_t usb_kbd_hid_instance(void) { return 1; }
 #include "bt.h"
 
 #ifdef ENABLE_WAKE_HID
-static volatile desc_variant_t desired_variant = DESC_VARIANT_FULL;
+static volatile desc_variant_t desired_variant = DESC_VARIANT_MINIMAL;
 #endif
 // Only ever set on wake builds (usb_set_host_suspended); stays false otherwise.
 static volatile bool host_suspended_flag = false;
@@ -581,7 +586,12 @@ void usb_notify_all_disconnected(void) {
     desired_exposed_slots = 1;
 }
 
-uint8_t usb_exposed_slot_count(void) { return active_exposed_slots; }
+uint8_t usb_exposed_slot_count(void) {
+#ifdef ENABLE_WAKE_HID
+    if (active_variant == DESC_VARIANT_MINIMAL) return 0; // no gamepads on the bus
+#endif
+    return active_exposed_slots;
+}
 
 // One-shot re-enumeration keeping the same shape. Used exactly once per
 // flash lifetime: the first controller ever paired supplies the bind-time
@@ -1143,15 +1153,27 @@ uint8_t const desc_hid_report_dummy[] = {
     0x06, 0x00, 0xFF, // Usage Page (Vendor Defined 0xFF00)
     0x09, 0x01,       // Usage (Vendor Usage 1)
     0xA1, 0x01,       // Collection (Application)
+    0x85, 0x01,       //   Report ID (1) -- IDs everywhere: 0x80/0x81 need them
     0x15, 0x00,       //   Logical Minimum (0)
     0x26, 0xFF, 0x00, //   Logical Maximum (255)
     0x75, 0x08,       //   Report Size (8)
     0x95, 0x01,       //   Report Count (1)
     0x09, 0x01,       //   Usage (Vendor Usage 1)
-    0x81, 0x02,       //   Input (Data,Var,Abs)
+    0x81, 0x02,       //   Input (Data,Var,Abs) -- never sent; placeholder
+    // USB config tunnel (hid_config.h): same 0x80 command / 0x81 reply pair
+    // as the gamepad interface, declared so hosts (WebHID validates against
+    // the descriptor) can drive the config page with no pad connected.
+    0x85, 0x80,       //   Report ID (0x80)
+    0x09, 0x02,       //   Usage (Vendor Usage 2)
+    0x95, 0x3F,       //   Report Count (63)
+    0xB1, 0x02,       //   Feature (Data,Var,Abs)
+    0x85, 0x81,       //   Report ID (0x81)
+    0x09, 0x03,       //   Usage (Vendor Usage 3)
+    0x95, 0x3F,       //   Report Count (63)
+    0xB1, 0x02,       //   Feature (Data,Var,Abs)
     0xC0              // End Collection
 };
-_Static_assert(sizeof(desc_hid_report_dummy) == 21, "dummy report descriptor length must match wDescriptorLength in minimal config descriptor");
+_Static_assert(sizeof(desc_hid_report_dummy) == 39, "dummy report descriptor length must match wDescriptorLength in minimal config descriptor");
 #endif
 
 // Invoked when received GET HID REPORT DESCRIPTOR

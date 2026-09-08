@@ -1120,11 +1120,12 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 // silently takes the lowest vacated seat.
                 usb_notify_all_disconnected();
 #ifdef ENABLE_WAKE_HID
-                // Stay enumerated (FULL, one gamepad interface): remote
-                // wakeup keeps working -- it only needs the device enumerated
-                // and suspended. The MINIMAL ghost-hiding variant is retained
-                // in usb_descriptors.cpp for a possible future config toggle,
-                // but is never requested.
+                // Drop back to the MINIMAL face (wake keyboard + config
+                // tunnel; no gamepad, no audio) so the host stops showing a
+                // controller that isn't there. Remote wakeup keeps working --
+                // it only needs the device enumerated and suspended -- and
+                // the deferred swap machinery keeps this safe mid-suspend.
+                usb_request_variant_minimal();
 #else
                 // Without ENABLE_WAKE_HID we hide the USB device whenever no
                 // controller is paired (upstream behavior).

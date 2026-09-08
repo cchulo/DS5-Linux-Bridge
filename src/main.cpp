@@ -338,11 +338,14 @@ uint16_t tud_hid_get_report_cb(uint8_t itf, uint8_t report_id,
     }
     return 0;
   }
-  // MINIMAL's non-keyboard instance is the inert dummy HID, NOT a gamepad.
-  // Don't route its GET_REPORT into the BT feature path (which would query a
-  // controller that isn't connected). Return 0 (STALL); the host never reads
-  // it.
+  // MINIMAL's non-keyboard instance is the dummy HID, NOT a gamepad: it
+  // carries ONLY the config tunnel (so the page works with no pad
+  // connected). Never route it into the BT feature path (which would query
+  // a controller that isn't there).
   if (!usb_descriptor_variant_is_full()) {
+    if (report_id == HID_CONFIG_REPORT_IN && hid_config_armed()) {
+      return hid_config_get_report(buffer, reqlen);
+    }
     return 0;
   }
 #endif
@@ -435,8 +438,12 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id,
     // Drop keyboard SET_REPORT (host LED state).
     return;
   }
-  // MINIMAL's non-keyboard instance is the inert dummy HID; ignore reports.
+  // MINIMAL's non-keyboard instance is the dummy HID: config tunnel only.
   if (!usb_descriptor_variant_is_full()) {
+    if (report_id == HID_CONFIG_REPORT_OUT &&
+        report_type == HID_REPORT_TYPE_FEATURE) {
+      hid_config_set_report(buffer, bufsize);
+    }
     return;
   }
 #endif
@@ -631,11 +638,11 @@ int main() {
   state_init();
 
 #ifdef ENABLE_WAKE_HID
-  // Enumerate immediately (FULL variant; one gamepad interface to start, see
-  // the exposed-slot orchestrator). Bind-time feature probes for
-  // not-yet-connected pads are answered from the persisted snapshot
-  // (bt_feature_snapshot_get). Being enumerated before the host suspends is
-  // also what makes remote-wakeup possible.
+  // Enumerate immediately, in the MINIMAL variant (wake keyboard + the
+  // config tunnel's dummy HID; no gamepad, no audio): the host shows no
+  // controller until one actually connects, at which point the swap
+  // orchestrator bounces to FULL. Being enumerated before the host suspends
+  // is what makes remote-wakeup possible.
   tud_connect();
 #endif
 
